@@ -50,12 +50,25 @@ def capture_screen():
 # ==========================================
 # OCR
 # ==========================================
-
 def extract_text(image):
 
+    width, height = image.size
+
+    # Crop the lower part of the movie screen
+    # where subtitles normally appear.
+    subtitle_area = image.crop(
+        (
+            0,
+            int(height * 0.65),
+            width,
+            int(height * 0.95)
+        )
+    )
+
     text = pytesseract.image_to_string(
-        image,
-        lang="eng"
+        subtitle_area,
+        lang="eng",
+        config="--psm 6"
     )
 
     return text.strip()
