@@ -5,6 +5,8 @@ import pytesseract
 import requests
 import base64
 import re
+import tkinter as tk
+from tkinter import simpledialog, messagebox
 
 
 # ==========================================
@@ -16,21 +18,28 @@ MODEL = "gemma3:4b"
 
 
 # ==========================================
-# MOVIEMIND MEMORY
+# MOVIE MEMORY
 # ==========================================
 
 movie_memory = {
-    # Character name -> number of observations
     "characters": {},
-
-    # Important objects discovered
     "objects": [],
-
-    # Last 5 subtitles
     "recent_dialogue": [],
-
-    # Most recent scene summary
     "scene_summary": ""
+}
+
+
+# ==========================================
+# CURRENT FRAME CACHE
+# ==========================================
+
+current_frame = {
+    "subtitle": "",
+    "scene_analysis": "",
+    "dialogue_meaning": "",
+    "characters": [],
+    "objects": [],
+    "scene": ""
 }
 
 
@@ -65,8 +74,6 @@ def extract_text(image):
 
     width, height = image.size
 
-    # Crop the lower part of the screen
-    # where subtitles normally appear.
     subtitle_area = image.crop(
         (
             0,
@@ -99,18 +106,14 @@ def image_to_base64(image_path):
 
 
 # ==========================================
-# GEMMA
+# GEMMA VISION
 # ==========================================
 
-def ask_gemma(subtitle):
+def analyze_current_frame(subtitle):
 
     image_base64 = image_to_base64(
         "screenshot.png"
     )
-
-    # --------------------------------------
-    # Prepare trusted character information
-    # --------------------------------------
 
     trusted_characters = [
         name
@@ -123,487 +126,11 @@ def ask_gemma(subtitle):
         for name, count in movie_memory["characters"].items()
         if count == 1
     ]
-
-    memory_text = f"""
-Trusted characters:
-{trusted_characters}
-
-Possible characters:
-{possible_characters}
-
-Character observation counts:
-{movie_memory["characters"]}
-
-Important objects:
-{movie_memory["objects"]}
-
-Recent dialogue:
-{movie_memory["recent_dialogue"]}
-
-Previous scene:
-{movie_memory["scene_summary"]}
-"""
-
-    # --------------------------------------
-    # Prompt
-    # --------------------------------------
-
-    prompt = f"""
-You are MovieMind, a local AI movie assistant.
-
-Analyze the CURRENT movie screenshot.
-
-Use these sources:
-
-1. CURRENT screenshot
-2. CURRENT subtitle
-3. Previous movie memory
-
-CURRENT SUBTITLE:
-{subtitle}
-
-
-PREVIOUS MOVIE CONTEXT:
-{memory_text}
-
-
-==========================================
-IMPORTANT CHARACTER RULES
-==========================================
-
-The CURRENT screenshot is the PRIMARY source.
-
-Previous memory is only supporting context.
-
-Do NOT blindly trust previous memory.
-
-If the current screenshot contradicts previous
-memory, follow the CURRENT screenshot.
-
-Identify specific fictional characters only when
-you have reasonable visual/contextual evidence.
-
-Do NOT invent character names.
-
-A character appearing once in memory is only a
-possibility.
-
-A character appearing two or more times is more
-reliable context, but the current screenshot still
-has priority.
-
-If you cannot confidently identify the character,
-say that the identity is uncertain.
-
-Do not force a character name.
-
-
-==========================================
-SCENE UNDERSTANDING
-==========================================
-
-Explain what is happening in the CURRENT scene.
-
-Explain what the CURRENT dialogue means.
-
-Keep the answer short and useful.
-
-Do NOT show reasoning.
-
-Do NOT repeat the subtitle unnecessarily.
-
-
-==========================================
-MEMORY
-==========================================
-
-After answering, create updated memory information.
-
-Only include characters you actually observe or
-have strong evidence for in the CURRENT scene.
-
-For characters, use only their names.
-
-For objects, include only important objects.
-
-Scene should be one short sentence describing
-the CURRENT situation.
-
-
-==========================================
-REQUIRED RESPONSE FORMAT
-==========================================
-
-ANSWER:
-<short natural answer>
-
-MEMORY:
-Characters: <comma-separated names>
-Objects: <comma-separated important objects>
-Scene: <one short sentence>
-"""
-
-    # --------------------------------------
-    # Ollama request
-    # --------------------------------------
-
-    data = {
-
-        "model": MODEL,
-
-        "messages": [
-
-            {
-                "role": "user",
-                "content": prompt,
-                "images": [image_base64]
-            }
-
-        ],
-
-        "stream": False,
-
-        "options": {
-
-            "temperature": 0.2,
-
-            "num_predict": 220
-        }
-    }
-
-    response = requests.post(
-        OLLAMA_URL,
-        json=data,
-        timeout=120
-    )
-
-    response.raise_for_status()
-
-    result = response.json()
-
-    return result["message"]["content"]
-
-
-# ==========================================
-# PARSE GEMMA RESPONSE
-# ==========================================
-
-def parse_response(response):
-
-    answer = ""
-
-    characters = []
-
-    objects = []
-
-    scene = ""
-
-
-    # --------------------------------------
-    # Extract ANSWER
-    # --------------------------------------
-
-    answer_match = re.search(
-        r"ANSWER:\s*(.*?)(?=\nMEMORY:|\Z)",
-        response,
-        re.IGNORECASE | re.DOTALL
-    )
-
-    if answer_match:
-
-        answer = answer_match.group(1).strip()
-
-
-    # --------------------------------------
-    # Extract MEMORY
-    # --------------------------------------
-
-    memory_match = re.search(
-        r"MEMORY:\s*(.*)",
-        response,
-        re.IGNORECASE | re.DOTALL
-    )
-
-    if memory_match:
-
-        memory_text = memory_match.group(1)
-
-
-        # ----------------------------------
-        # Characters
-        # ----------------------------------
-
-        char_match = re.search(
-            r"Characters:\s*(.*?)(?=\nObjects:|\Z)",
-            memory_text,
-            re.IGNORECASE | re.DOTALL
-        )
-
-        if char_match:
-
-            characters = [
-                x.strip()
-                for x in char_match.group(1).split(",")
-                if x.strip()
-            ]
-
-
-        # ----------------------------------
-        # Objects
-        # ----------------------------------
-
-        object_match = re.search(
-            r"Objects:\s*(.*?)(?=\nScene:|\Z)",
-            memory_text,
-            re.IGNORECASE | re.DOTALL
-        )
-
-        if object_match:
-
-            objects = [
-                x.strip()
-                for x in object_match.group(1).split(",")
-                if x.strip()
-            ]
-
-
-        # ----------------------------------
-        # Scene
-        # ----------------------------------
-
-        scene_match = re.search(
-            r"Scene:\s*(.*)",
-            memory_text,
-            re.IGNORECASE | re.DOTALL
-        )
-
-        if scene_match:
-
-            scene = scene_match.group(1).strip()
-
-
-    return answer, characters, objects, scene
-
-
-# ==========================================
-# UPDATE MEMORY
-# ==========================================
-
-def update_memory(
-    subtitle,
-    characters,
-    objects,
-    scene
-):
-
-    # ======================================
-    # CHARACTERS
-    # ======================================
-
-    for character in characters:
-
-        character = character.strip()
-
-        if not character:
-            continue
-
-        # Avoid meaningless responses
-        if character.lower() in [
-            "unknown",
-            "uncertain",
-            "unknown character",
-            "none",
-            "n/a"
-        ]:
-            continue
-
-        # First observation
-        if character not in movie_memory["characters"]:
-
-            movie_memory["characters"][character] = 1
-
-        # Existing observation
-        else:
-
-            movie_memory["characters"][character] += 1
-
-
-    # ======================================
-    # OBJECTS
-    # ======================================
-
-    for obj in objects:
-
-        obj = obj.strip()
-
-        if not obj:
-            continue
-
-        if obj.lower() in [
-            "unknown",
-            "none",
-            "n/a"
-        ]:
-            continue
-
-        if obj not in movie_memory["objects"]:
-
-            movie_memory["objects"].append(obj)
-
-
-    # ======================================
-    # RECENT DIALOGUE
-    # ======================================
-
-    if (
-        subtitle
-        and subtitle != "No subtitle detected."
-    ):
-
-        movie_memory["recent_dialogue"].append(
-            subtitle
-        )
-
-
-    # Keep only the latest 5 subtitles
-    movie_memory["recent_dialogue"] = (
-        movie_memory["recent_dialogue"][-5:]
-    )
-
-
-    # ======================================
-    # CURRENT SCENE
-    # ======================================
-
-    if scene:
-
-        movie_memory["scene_summary"] = scene
-
-
-# ==========================================
-# DISPLAY MEMORY
-# ==========================================
-
-def show_memory():
-
-    print("\n🧠 CURRENT MEMORY")
-    print("--------------------------------")
-
-    print(
-        "Characters:",
-        movie_memory["characters"]
-    )
-
-    print(
-        "Objects:",
-        movie_memory["objects"]
-    )
-
-    print(
-        "Recent dialogue:",
-        movie_memory["recent_dialogue"]
-    )
-
-    print(
-        "Scene:",
-        movie_memory["scene_summary"]
-    )
-
-    print("--------------------------------")
-
-
-# ==========================================
-# MOVIEMIND ACTION
-# ==========================================
-def ask_interactive_gemma(
-    subtitle,
-    choice,
-    extra_input
-):
-
-    image_base64 = image_to_base64(
-        "screenshot.png"
-    )
-
-
-    # --------------------------------------
-    # Memory
-    # --------------------------------------
-
-    trusted_characters = [
-        name
-        for name, count in movie_memory["characters"].items()
-        if count >= 2
-    ]
-
-
-    possible_characters = [
-        name
-        for name, count in movie_memory["characters"].items()
-        if count == 1
-    ]
-
-
-    # --------------------------------------
-    # Determine mode
-    # --------------------------------------
-
-    if choice == "1":
-
-        task = """
-Explain what is happening in the current scene.
-
-Mention specific characters when reasonably
-confident.
-
-Explain the important action and situation.
-"""
-
-
-    elif choice == "2":
-
-        task = f"""
-Explain the meaning of the current dialogue.
-
-Current dialogue:
-{subtitle}
-
-Explain what the speaker means in simple language.
-"""
-
-
-    elif choice == "3":
-
-        task = f"""
-Explain the meaning of this word in the context
-of the current movie scene.
-
-Word:
-{extra_input}
-
-Give:
-1. Simple meaning
-2. Meaning in this scene
-3. A short example if useful
-"""
-
-
-    elif choice == "4":
-
-        task = f"""
-Answer the user's question using the current
-screenshot, subtitle and movie memory.
-
-User question:
-{extra_input}
-"""
-
 
     prompt = f"""
 You are MovieMind, a local offline movie assistant.
 
-CURRENT SCREENSHOT:
-Analyze the image carefully.
+Analyze the CURRENT movie screenshot.
 
 CURRENT SUBTITLE:
 {subtitle}
@@ -625,49 +152,60 @@ Recent dialogue:
 Previous scene:
 {movie_memory["scene_summary"]}
 
-
 IMPORTANT RULES:
 
-- The current screenshot is the primary evidence.
-- Previous memory is only supporting context.
-- Do not blindly trust memory.
-- Do not invent character names.
-- If a character cannot be identified confidently,
-  say so.
-- Keep the answer concise.
-- Do not show reasoning.
+1. The CURRENT screenshot is the primary evidence.
 
+2. Previous memory is only supporting context.
 
-TASK:
+3. Never let previous memory override the current
+   screenshot.
 
-{task}
+4. Identify specific fictional characters when
+   reasonably confident.
+
+5. Do not invent character names.
+
+6. If a character cannot be identified confidently,
+   say that the identity is uncertain.
+
+7. Explain the current scene.
+
+8. Explain what the current dialogue means.
+
+9. Keep the response concise.
+
+10. Do not show reasoning.
+
+Use EXACTLY this format:
+
+ANSWER:
+<short scene explanation>
+
+DIALOGUE:
+<meaning of the current subtitle>
+
+MEMORY:
+Characters: <comma-separated names>
+Objects: <comma-separated important objects>
+Scene: <one short sentence>
 """
 
-
     data = {
-
         "model": MODEL,
-
         "messages": [
-
             {
                 "role": "user",
                 "content": prompt,
                 "images": [image_base64]
             }
-
         ],
-
         "stream": False,
-
         "options": {
-
             "temperature": 0.2,
-
-            "num_predict": 180
+            "num_predict": 220
         }
     }
-
 
     response = requests.post(
         OLLAMA_URL,
@@ -675,14 +213,597 @@ TASK:
         timeout=120
     )
 
-
     response.raise_for_status()
-
 
     result = response.json()
 
+    return result["message"]["content"]
+
+
+# ==========================================
+# PARSE VISION RESPONSE
+# ==========================================
+
+def parse_vision_response(response):
+
+    answer = ""
+    dialogue = ""
+    characters = []
+    objects = []
+    scene = ""
+
+    answer_match = re.search(
+        r"ANSWER:\s*(.*?)(?=\nDIALOGUE:|\nMEMORY:|\Z)",
+        response,
+        re.IGNORECASE | re.DOTALL
+    )
+
+    if answer_match:
+        answer = answer_match.group(1).strip()
+
+    dialogue_match = re.search(
+        r"DIALOGUE:\s*(.*?)(?=\nMEMORY:|\Z)",
+        response,
+        re.IGNORECASE | re.DOTALL
+    )
+
+    if dialogue_match:
+        dialogue = dialogue_match.group(1).strip()
+
+    memory_match = re.search(
+        r"MEMORY:\s*(.*)",
+        response,
+        re.IGNORECASE | re.DOTALL
+    )
+
+    if memory_match:
+
+        memory_text = memory_match.group(1)
+
+        char_match = re.search(
+            r"Characters:\s*(.*?)(?=\nObjects:|\Z)",
+            memory_text,
+            re.IGNORECASE | re.DOTALL
+        )
+
+        if char_match:
+
+            characters = [
+                x.strip()
+                for x in char_match.group(1).split(",")
+                if x.strip()
+            ]
+
+        object_match = re.search(
+            r"Objects:\s*(.*?)(?=\nScene:|\Z)",
+            memory_text,
+            re.IGNORECASE | re.DOTALL
+        )
+
+        if object_match:
+
+            objects = [
+                x.strip()
+                for x in object_match.group(1).split(",")
+                if x.strip()
+            ]
+
+        scene_match = re.search(
+            r"Scene:\s*(.*)",
+            memory_text,
+            re.IGNORECASE | re.DOTALL
+        )
+
+        if scene_match:
+            scene = scene_match.group(1).strip()
+
+    return (
+        answer,
+        dialogue,
+        characters,
+        objects,
+        scene
+    )
+
+
+# ==========================================
+# UPDATE MOVIE MEMORY
+# ==========================================
+
+def update_memory(
+    subtitle,
+    characters,
+    objects,
+    scene
+):
+
+    for character in characters:
+
+        character = character.strip()
+
+        if not character:
+            continue
+
+        if character.lower() in [
+            "unknown",
+            "uncertain",
+            "unknown character",
+            "none",
+            "n/a"
+        ]:
+            continue
+
+        if character not in movie_memory["characters"]:
+            movie_memory["characters"][character] = 1
+        else:
+            movie_memory["characters"][character] += 1
+
+    for obj in objects:
+
+        obj = obj.strip()
+
+        if not obj:
+            continue
+
+        if obj.lower() in [
+            "unknown",
+            "none",
+            "n/a"
+        ]:
+            continue
+
+        if obj not in movie_memory["objects"]:
+            movie_memory["objects"].append(obj)
+
+    if (
+        subtitle
+        and subtitle != "No subtitle detected."
+    ):
+
+        movie_memory["recent_dialogue"].append(
+            subtitle
+        )
+
+    movie_memory["recent_dialogue"] = (
+        movie_memory["recent_dialogue"][-5:]
+    )
+
+    if scene:
+        movie_memory["scene_summary"] = scene
+
+
+# ==========================================
+# UPDATE FRAME CACHE
+# ==========================================
+
+def update_frame_cache(
+    subtitle,
+    answer,
+    dialogue,
+    characters,
+    objects,
+    scene
+):
+
+    current_frame["subtitle"] = subtitle
+    current_frame["scene_analysis"] = answer
+    current_frame["dialogue_meaning"] = dialogue
+    current_frame["characters"] = characters
+    current_frame["objects"] = objects
+    current_frame["scene"] = scene
+
+
+# ==========================================
+# TEXT-ONLY GEMMA
+# ==========================================
+
+def ask_text_gemma(prompt):
+
+    data = {
+        "model": MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "stream": False,
+        "options": {
+            "temperature": 0.2,
+            "num_predict": 180
+        }
+    }
+
+    response = requests.post(
+        OLLAMA_URL,
+        json=data,
+        timeout=120
+    )
+
+    response.raise_for_status()
+
+    result = response.json()
 
     return result["message"]["content"]
+
+
+# ==========================================
+# INTERACTIVE ANSWERS
+# ==========================================
+
+def get_answer(choice, extra_input=""):
+
+    subtitle = current_frame["subtitle"]
+    scene = current_frame["scene_analysis"]
+    dialogue = current_frame["dialogue_meaning"]
+    characters = current_frame["characters"]
+    objects = current_frame["objects"]
+
+    trusted_characters = [
+        name
+        for name, count in movie_memory["characters"].items()
+        if count >= 2
+    ]
+
+    # --------------------------------------
+    # SCENE
+    # --------------------------------------
+
+    if choice == "scene":
+
+        return scene
+
+
+    # --------------------------------------
+    # DIALOGUE
+    # --------------------------------------
+
+    if choice == "dialogue":
+
+        return dialogue
+
+
+    # --------------------------------------
+    # WORD
+    # --------------------------------------
+
+    if choice == "word":
+
+        prompt = f"""
+You are MovieMind.
+
+Explain this word in the context of the
+current movie scene.
+
+WORD:
+{extra_input}
+
+CURRENT SUBTITLE:
+{subtitle}
+
+CURRENT SCENE:
+{scene}
+
+CURRENT DIALOGUE MEANING:
+{dialogue}
+
+Give:
+
+1. Simple meaning
+2. Meaning in this scene
+3. Short example if useful
+
+Keep the answer concise.
+Do not show reasoning.
+"""
+
+        return ask_text_gemma(prompt)
+
+
+    # --------------------------------------
+    # QUESTION
+    # --------------------------------------
+
+    if choice == "question":
+
+        prompt = f"""
+You are MovieMind, a local offline movie assistant.
+
+Answer the user's question using the current
+movie context.
+
+CURRENT SUBTITLE:
+{subtitle}
+
+CURRENT SCENE:
+{scene}
+
+CURRENT DIALOGUE:
+{dialogue}
+
+CURRENT CHARACTERS:
+{characters}
+
+CURRENT OBJECTS:
+{objects}
+
+PREVIOUS MOVIE MEMORY:
+{movie_memory["scene_summary"]}
+
+TRUSTED CHARACTERS:
+{trusted_characters}
+
+USER QUESTION:
+{extra_input}
+
+Rules:
+
+- Use available evidence.
+- Do not invent facts.
+- If something is unknown, say so.
+- Keep the answer concise.
+- Do not show reasoning.
+"""
+
+        return ask_text_gemma(prompt)
+
+
+# ==========================================
+# BASIC TKINTER UI
+# ==========================================
+
+def show_movie_mind_window():
+
+    window = tk.Tk()
+
+    window.title("🎬 MovieMind")
+
+    window.geometry("520x520")
+
+    window.resizable(False, False)
+
+
+    # --------------------------------------
+    # Title
+    # --------------------------------------
+
+    title = tk.Label(
+        window,
+        text="🎬 MovieMind",
+        font=("Arial", 20, "bold")
+    )
+
+    title.pack(
+        pady=(15, 5)
+    )
+
+
+    subtitle_label = tk.Label(
+        window,
+        text="What would you like to know?",
+        font=("Arial", 11)
+    )
+
+    subtitle_label.pack(
+        pady=(0, 15)
+    )
+
+
+    # --------------------------------------
+    # Answer area
+    # --------------------------------------
+
+    answer_box = tk.Text(
+        window,
+        height=12,
+        width=58,
+        wrap="word",
+        font=("Arial", 10)
+    )
+
+    answer_box.pack(
+        padx=15,
+        pady=10
+    )
+
+
+    answer_box.insert(
+        "1.0",
+        current_frame["scene_analysis"]
+    )
+
+    answer_box.config(
+        state="disabled"
+    )
+
+
+    # ======================================
+    # DISPLAY ANSWER
+    # ======================================
+
+    def display_answer(answer):
+
+        answer_box.config(
+            state="normal"
+        )
+
+        answer_box.delete(
+            "1.0",
+            tk.END
+        )
+
+        answer_box.insert(
+            "1.0",
+            answer
+        )
+
+        answer_box.config(
+            state="disabled"
+        )
+
+
+    # ======================================
+    # SCENE
+    # ======================================
+
+    def scene_clicked():
+
+        display_answer(
+            get_answer("scene")
+        )
+
+
+    # ======================================
+    # DIALOGUE
+    # ======================================
+
+    def dialogue_clicked():
+
+        display_answer(
+            get_answer("dialogue")
+        )
+
+
+    # ======================================
+    # WORD
+    # ======================================
+
+    def word_clicked():
+
+        word = simpledialog.askstring(
+            "Explain Word",
+            "Enter the word:",
+            parent=window
+        )
+
+        if not word:
+            return
+
+        display_answer(
+            get_answer(
+                "word",
+                word
+            )
+        )
+
+
+    # ======================================
+    # QUESTION
+    # ======================================
+
+    def question_clicked():
+
+        question = simpledialog.askstring(
+            "Ask Question",
+            "Enter your question:",
+            parent=window
+        )
+
+        if not question:
+            return
+
+        display_answer(
+            get_answer(
+                "question",
+                question
+            )
+        )
+
+
+    # ======================================
+    # BUTTONS
+    # ======================================
+
+    button_frame = tk.Frame(window)
+
+    button_frame.pack(
+        pady=5
+    )
+
+
+    scene_button = tk.Button(
+        button_frame,
+        text="Explain Scene",
+        width=18,
+        command=scene_clicked
+    )
+
+    scene_button.grid(
+        row=0,
+        column=0,
+        padx=5,
+        pady=5
+    )
+
+
+    dialogue_button = tk.Button(
+        button_frame,
+        text="Explain Dialogue",
+        width=18,
+        command=dialogue_clicked
+    )
+
+    dialogue_button.grid(
+        row=0,
+        column=1,
+        padx=5,
+        pady=5
+    )
+
+
+    word_button = tk.Button(
+        button_frame,
+        text="Explain Word",
+        width=18,
+        command=word_clicked
+    )
+
+    word_button.grid(
+        row=1,
+        column=0,
+        padx=5,
+        pady=5
+    )
+
+
+    question_button = tk.Button(
+        button_frame,
+        text="Ask Question",
+        width=18,
+        command=question_clicked
+    )
+
+    question_button.grid(
+        row=1,
+        column=1,
+        padx=5,
+        pady=5
+    )
+
+
+    # --------------------------------------
+    # CLOSE
+    # --------------------------------------
+
+    close_button = tk.Button(
+        window,
+        text="Close",
+        width=15,
+        command=window.destroy
+    )
+
+    close_button.pack(
+        pady=15
+    )
+
+
+    window.mainloop()
+
+
+# ==========================================
+# MOVIEMIND ACTION
+# ==========================================
+
 def movie_mind():
 
     print("\n📸 Capturing screen...")
@@ -711,159 +832,81 @@ def movie_mind():
 
 
     # --------------------------------------
-    # INTERACTION LOOP
+    # ONE VISION ANALYSIS
     # --------------------------------------
 
-    while True:
-
-        print("\n🎬 What would you like to know?")
-        print("--------------------------------")
-        print("1. Explain this scene")
-        print("2. Explain the dialogue")
-        print("3. Explain a word")
-        print("4. Ask a question")
-        print("5. Return to movie")
-        print("--------------------------------")
+    print("\n🧠 Analyzing current scene...")
 
 
-        choice = input(
-            "Choose an option: "
-        ).strip()
+    try:
+
+        raw_response = analyze_current_frame(
+            subtitle
+        )
+
+    except Exception as error:
+
+        print("\n❌ Ollama error:")
+        print(error)
+
+        return
 
 
-        # ==================================
-        # RETURN TO MOVIE
-        # ==================================
+    # --------------------------------------
+    # PARSE
+    # --------------------------------------
 
-        if choice == "5":
-
-            print("\n🎬 Returning to movie...")
-
-            return
-
-
-        # ==================================
-        # WORD
-        # ==================================
-
-        extra_input = ""
+    (
+        answer,
+        dialogue,
+        characters,
+        objects,
+        scene
+    ) = parse_vision_response(
+        raw_response
+    )
 
 
-        if choice == "3":
+    # --------------------------------------
+    # CACHE
+    # --------------------------------------
 
-            extra_input = input(
-                "\nEnter the word: "
-            ).strip()
-
-
-            if not extra_input:
-
-                print("\n❌ No word entered.")
-
-                continue
-
-
-        # ==================================
-        # QUESTION
-        # ==================================
-
-        elif choice == "4":
-
-            extra_input = input(
-                "\nEnter your question: "
-            ).strip()
+    update_frame_cache(
+        subtitle,
+        answer,
+        dialogue,
+        characters,
+        objects,
+        scene
+    )
 
 
-            if not extra_input:
+    # --------------------------------------
+    # MEMORY
+    # --------------------------------------
 
-                print("\n❌ No question entered.")
-
-                continue
-
-
-        # ==================================
-        # INVALID OPTION
-        # ==================================
-
-        if choice not in ["1", "2", "3", "4"]:
-
-            print("\n❌ Invalid option.")
-
-            continue
+    update_memory(
+        subtitle,
+        characters,
+        objects,
+        scene
+    )
 
 
-        # ==================================
-        # ASK GEMMA
-        # ==================================
+    print("\n🧠 Frame analysis complete.")
 
-        print("\n🧠 Asking Gemma 3...")
+    print("🪟 Opening MovieMind UI...")
 
 
-        try:
+    # --------------------------------------
+    # OPEN UI
+    # --------------------------------------
 
-            answer = ask_interactive_gemma(
-                subtitle,
-                choice,
-                extra_input
-            )
-
-        except Exception as error:
-
-            print("\n❌ Ollama error:")
-            print(error)
-
-            continue
-
-
-        # ==================================
-        # DISPLAY ANSWER
-        # ==================================
-
-        print("\n🎬 MOVIEMIND")
-        print("================================")
-
-        print(answer)
-
-        print("================================")
-
-
-        # ==================================
-        # UPDATE MEMORY
-        # ==================================
-
-        try:
-
-            raw_context = ask_gemma(
-                subtitle
-            )
-
-
-            _, characters, objects, scene = (
-                parse_response(raw_context)
-            )
-
-
-            update_memory(
-                subtitle,
-                characters,
-                objects,
-                scene
-            )
-
-
-        except Exception as error:
-
-            print(
-                "\n⚠️ Memory update skipped:",
-                error
-            )
-
-
-        print("\n🧠 Memory updated.")
+    show_movie_mind_window()
 
 
 # ==========================================
-# START MOVIEMIND
+# START
 # ==========================================
 
 print("================================")
@@ -874,14 +917,12 @@ print("Press ESC to exit.")
 print()
 
 
-# F8 -> MovieMind
 keyboard.add_hotkey(
     "f8",
     movie_mind
 )
 
 
-# ESC -> Exit
 keyboard.wait("esc")
 
 
