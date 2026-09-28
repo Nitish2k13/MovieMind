@@ -7,6 +7,7 @@ session = MovieSessionManager()
 
 
 def checkpoint():
+
     print()
     print("🎬 TEST CHECKPOINT")
     print("This is where MovieMind will analyze the movie.")
@@ -14,15 +15,20 @@ def checkpoint():
 
 
 def paused():
+
     print("⏸️ TEST: MovieMind paused")
 
 
 def resumed():
+
     print("▶️ TEST: MovieMind resumed")
 
 
 def stopped(reason):
-    print(f"🛑 TEST: Session ended → {reason}")
+
+    print(
+        f"🛑 TEST: Session ended → {reason}"
+    )
 
 
 session.on_checkpoint = checkpoint
@@ -33,13 +39,16 @@ session.on_stop = stopped
 
 print()
 print("================================")
-print("     MovieMind Session Test")
+print("     MovieMind VLC Test")
 print("================================")
 print()
-print("Make sure VLC is OPEN before starting.")
+
+print("1. Open VLC.")
+print("2. Start a movie.")
+print("3. Leave the movie playing.")
 print()
-print("Press ENTER to start...")
-input()
+
+input("Press ENTER to start MovieMind...")
 
 
 session.start()
@@ -61,10 +70,10 @@ try:
             flush=True
         )
 
+
 except KeyboardInterrupt:
 
     print()
-    print("Keyboard interrupt.")
 
     session.stop(
         "Test interrupted by user."

@@ -80,8 +80,15 @@ movie_memory = {
     "characters": {},
     "objects": [],
     "recent_dialogue": [],
-    "scene_summary": ""
+    "scene_summary": "",
+    "visual_observations": []
 }
+
+# Safe visual memory: observations are created only when the user presses F8.
+# We store compact metadata + a tiny visual signature, NOT full screenshots.
+# This keeps storage and battery usage extremely low.
+MAX_VISUAL_OBSERVATIONS = 300
+MAX_VISUAL_CONTEXT = 30
 
 
 # ==========================================
@@ -96,6 +103,115 @@ current_frame = {
     "objects": [],
     "scene": ""
 }
+
+# The answer currently visible in the UI.
+current_displayed_answer = ""
+
+
+# ==========================================
+# LIGHTWEIGHT VISUAL MEMORY
+# ==========================================
+
+def make_visual_signature(image):
+    """Create a tiny screen fingerprint without saving the full image."""
+
+    small = image.convert("L").resize((32, 18))
+    pixels = list(small.getdata())
+    average = sum(pixels) / len(pixels)
+
+    # One byte per pixel after normalization.
+    signature = bytes(
+        max(0, min(255, int(pixel - average + 128)))
+        for pixel in pixels
+    )
+
+    return signature.hex()
+
+
+def visual_signature_difference(signature_a, signature_b):
+    """Return a simple 0..1 difference score for two signatures."""
+
+    if not signature_a or not signature_b:
+        return 1.0
+
+    try:
+        a = bytes.fromhex(signature_a)
+        b = bytes.fromhex(signature_b)
+    except ValueError:
+        return 1.0
+
+    if len(a) != len(b) or not a:
+        return 1.0
+
+    difference = sum(abs(x - y) for x, y in zip(a, b))
+    return difference / (255 * len(a))
+
+
+def build_visual_memory_context():
+    """Build a small text summary for Gemma without sending old screenshots."""
+
+    observations = movie_memory.get("visual_observations", [])[-MAX_VISUAL_CONTEXT:]
+
+    if not observations:
+        return "No previous visual observations yet."
+
+    lines = []
+
+    for observation in observations:
+        index = observation.get("index", "?")
+        objects = ", ".join(observation.get("objects", [])) or "none"
+        characters = ", ".join(observation.get("characters", [])) or "none"
+        scene = observation.get("scene", "")
+        subtitle = observation.get("subtitle", "")
+
+        lines.append(
+            f"F8 observation #{index}: Characters=[{characters}] | "
+            f"Objects=[{objects}] | Scene={scene} | Subtitle={subtitle}"
+        )
+
+    return "\n".join(lines)
+
+
+def save_visual_observation(image, subtitle, characters, objects, scene):
+    """Store only compact visual metadata; do not save another full screenshot."""
+
+    signature = make_visual_signature(image)
+
+    previous = movie_memory.get("visual_observations", [])
+    index = len(previous) + 1
+
+    similar_observations = []
+
+    for observation in previous[-MAX_VISUAL_CONTEXT:]:
+        difference = visual_signature_difference(
+            signature,
+            observation.get("signature", "")
+        )
+
+        if difference < 0.12:
+            similar_observations.append({
+                "index": observation.get("index", "?"),
+                "difference": round(difference, 3),
+                "objects": observation.get("objects", []),
+                "characters": observation.get("characters", [])
+            })
+
+    observation = {
+        "index": index,
+        "signature": signature,
+        "subtitle": subtitle,
+        "characters": list(characters),
+        "objects": list(objects),
+        "scene": scene,
+        "similar_previous": similar_observations[-5:]
+    }
+
+    movie_memory["visual_observations"].append(observation)
+    movie_memory["visual_observations"] = (
+        movie_memory["visual_observations"][-MAX_VISUAL_OBSERVATIONS:]
+    )
+
+    return similar_observations
 
 
 # ==========================================
@@ -214,6 +330,9 @@ Recent dialogue:
 Previous scene:
 {movie_memory["scene_summary"]}
 
+PREVIOUS VISUAL OBSERVATIONS:
+{build_visual_memory_context()}
+
 IMPORTANT RULES:
 
 1. The CURRENT screenshot is the primary visual evidence.
@@ -249,6 +368,11 @@ IMPORTANT RULES:
     available from the current frame, subtitle, memory, and
     your known movie knowledge. Clearly distinguish a likely
     interpretation from something directly visible.
+
+13. Previous visual observations are only hints. If the same
+    object, character, symbol, costume, or visual element appears
+    to recur, mention it as a possible visual callback only when
+    the evidence supports it. Do not claim filmmaker intent.
 
 Use EXACTLY this format:
 
@@ -492,8 +616,13 @@ question genuinely needs more context.
 
 For a question such as "Who is Iron Man?", do not answer only
 "Tony Stark is Iron Man." Explain who Tony Stark is, his role in
-the movie, his relationship to the current situation, and any
-relevant context available in the supplied movie information.
+the movie, relevant relationships, and why he matters in the
+current situation when that information is available.
+
+If the user asks for visual hidden details or Easter eggs, focus
+on things visible in the current scene: objects, symbols,
+posters, background details, costumes, repeated visual elements,
+and visual callbacks. Do not invent a hidden detail.
 
 Use available evidence from the prompt and make reasonable
 inferences when supported.
@@ -501,11 +630,6 @@ inferences when supported.
 Do not simply say "I don't know" when useful information exists.
 If one specific detail is genuinely unavailable, explain what
 can be established and what cannot.
-
-If the user asks about an Easter egg, hidden detail, callback,
-reference, foreshadowing, or previous event, discuss it only
-when there is supporting evidence. Clearly label uncertain
-interpretations instead of presenting guesses as facts.
 
 Do not show reasoning.
 
@@ -539,6 +663,62 @@ USER REQUEST:
     result = response.json()
 
     return result["message"]["content"]
+
+
+def translate_existing_answer(answer):
+    """
+    Re-express an already generated MovieMind answer in the
+    currently selected language without changing its meaning.
+    """
+
+    language_instruction = get_language_instruction()
+
+    prompt = f"""
+Re-express the following MovieMind answer in the selected
+reply language.
+
+{language_instruction}
+
+IMPORTANT:
+- Preserve the original facts and meaning.
+- Do not add new information.
+- Do not remove important details.
+- Keep character names, movie names, and proper nouns unchanged
+  when appropriate.
+- If Tanglish is selected, use Tamil written in English letters.
+- Do not explain what you are doing.
+- Return only the rewritten answer.
+
+EXISTING ANSWER:
+{answer}
+"""
+
+    data = {
+        "model": MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "stream": False,
+        "options": {
+            "temperature": 0.15,
+            "num_predict": 320
+        }
+    }
+
+    response = requests.post(
+        OLLAMA_URL,
+        json=data,
+        timeout=120
+    )
+
+    response.raise_for_status()
+
+    result = response.json()
+
+    return result["message"]["content"].strip()
 
 
 # ==========================================
@@ -648,6 +828,9 @@ RECENT DIALOGUE:
 TRUSTED CHARACTERS:
 {trusted_characters}
 
+PREVIOUS VISUAL OBSERVATIONS:
+{build_visual_memory_context()}
+
 USER QUESTION:
 {extra_input}
 
@@ -664,11 +847,21 @@ current situation when that information is available.
 For "why" questions, explain the cause and the relevant
 previous event or motivation when supported.
 
-For questions about previous references, callbacks, hidden
-details, foreshadowing, or Easter eggs, use the supplied
-movie memory first and then your known movie knowledge.
-Clearly distinguish what is visible/known from what is only
-a likely interpretation.
+For questions about VISUAL hidden details or Easter eggs,
+focus on what can actually be seen in the current frame:
+objects, symbols, posters, background details, costumes,
+logos, repeated visual elements, and visual callbacks.
+
+If the supplied movie memory contains timestamped visual
+observations, compare the current scene with those observations
+to identify a possible repeated object or visual callback.
+
+Do not invent an Easter egg. If the evidence is insufficient,
+say that it is only a possibility or that the current evidence
+is not enough.
+
+For story references or previous events, use the supplied movie
+memory and clearly distinguish known facts from interpretation.
 
 If the exact answer cannot be established, answer the parts
 that CAN be established instead of replying only "I don't know."
@@ -832,6 +1025,10 @@ def show_movie_mind_window():
     # ======================================
 
     def display_answer(answer):
+
+        global current_displayed_answer
+
+        current_displayed_answer = answer
 
         answer_box.config(
             state="normal"
@@ -998,8 +1195,7 @@ def show_movie_mind_window():
     language_button = tk.Button(
         window,
         text=f"🌐 Reply Language: {response_language}",
-        width=25,
-        command=lambda: change_language_and_refresh()
+        width=25
     )
 
     language_button.pack(
@@ -1008,11 +1204,37 @@ def show_movie_mind_window():
 
     def change_language_and_refresh():
 
+        global current_displayed_answer
+
+        old_language = response_language
+
         choose_reply_language(window)
 
         language_button.config(
             text=f"🌐 Reply Language: {response_language}"
         )
+
+        # If the user changed language after receiving an answer,
+        # immediately rewrite the existing visible answer.
+        if (
+            current_displayed_answer
+            and response_language != old_language
+        ):
+            try:
+                translated = translate_existing_answer(
+                    current_displayed_answer
+                )
+                display_answer(translated)
+
+            except Exception as error:
+                messagebox.showerror(
+                    "MovieMind",
+                    f"Could not change the current answer language.\n\n{error}"
+                )
+
+    language_button.config(
+        command=change_language_and_refresh
+    )
 
     # --------------------------------------
     # CLOSE
@@ -1126,6 +1348,27 @@ def movie_mind():
     )
 
 
+    # --------------------------------------
+    # VISUAL MEMORY
+    # --------------------------------------
+
+    similar_visuals = save_visual_observation(
+        image,
+        subtitle,
+        characters,
+        objects,
+        scene
+    )
+
+    if similar_visuals:
+        print("\n🔎 Possible visually similar earlier observations:")
+        for item in similar_visuals[-3:]:
+            print(
+                f"   #{item['index']} | difference={item['difference']} | "
+                f"objects={item['objects']} | characters={item['characters']}"
+            )
+
+
     print("\n🧠 Frame analysis complete.")
 
     print("🪟 Opening MovieMind UI...")
@@ -1146,6 +1389,7 @@ print("================================")
 print("       🎬 MovieMind")
 print("================================")
 print("Press F8 to analyze the movie.")
+print("Each F8 also stores a tiny visual memory record (no full screenshot archive).")
 print("Press ESC to exit.")
 print()
 

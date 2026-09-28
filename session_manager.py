@@ -2,46 +2,37 @@ import time
 import threading
 import subprocess
 import atexit
-import mss
-from PIL import Image, ImageChops
+
+import vlc
 
 
 class MovieSessionManager:
 
-    # ---------------------------------------------------------
+    # =========================================================
     # SETTINGS
-    # ---------------------------------------------------------
+    # =========================================================
 
-    CHECKPOINT_INTERVAL = 10 * 60          # 10 minutes
-    MAX_ACTIVE_TIME = 2 * 60 * 60 + 30 * 60   # 2 hours 30 minutes
+    CHECKPOINT_INTERVAL = 10 * 60
+    MAX_ACTIVE_TIME = 2 * 60 * 60 + 30 * 60
 
-    # Supported media players for the first version.
-    MEDIA_PROCESSES = {
-        "vlc.exe",
-        "wmplayer.exe",
-        "mpv.exe",
-        "potplayer.exe",
-        "potplayermini.exe",
-        "potplayermini64.exe",
-        "video.ui.exe"
-    }
+    VLC_PROCESS = "vlc.exe"
 
     def __init__(self):
 
         self.active = False
         self.paused = False
 
-        # Total movie PLAYING time.
-        # Paused time is not counted.
+        # Only counts actual PLAYING time.
         self.active_movie_seconds = 0
 
-        self.last_checkpoint_time = 0
         self.last_state_check = time.time()
+        self.last_checkpoint_time = time.time()
 
         self.stop_reason = ""
 
         self.monitor_thread = None
 
+        # Callbacks
         self.on_checkpoint = None
         self.on_pause = None
         self.on_resume = None
@@ -49,16 +40,17 @@ class MovieSessionManager:
 
         self._lock = threading.Lock()
 
-        # Used to determine whether the movie screen is changing.
-        self.previous_frame = None
+        # VLC LibVLC instance
+        self.vlc_instance = vlc.Instance()
 
-        self.sct = mss.mss()
+        # VLC media player object
+        self.vlc_player = self.vlc_instance.media_player_new()
 
         atexit.register(self.shutdown)
 
 
     # =========================================================
-    # START SESSION
+    # START
     # =========================================================
 
     def start(self):
@@ -73,24 +65,24 @@ class MovieSessionManager:
             self.paused = False
 
             self.active_movie_seconds = 0
-            self.last_checkpoint_time = time.time()
+
             self.last_state_check = time.time()
+            self.last_checkpoint_time = time.time()
 
             self.stop_reason = ""
 
-            self.previous_frame = self.capture_small_frame()
-
-            print()
-            print("================================")
-            print("       🎬 MovieMind Session")
-            print("================================")
-            print("🟢 Session started.")
-            print("🧠 Background movie understanding: ON")
-            print("⏱️ Checkpoints: approximately every 10 minutes")
-            print("⏳ Maximum active movie time: 2 hours 30 minutes")
-            print()
-            print("F8 → Ask MovieMind")
-            print()
+        print()
+        print("================================")
+        print("       🎬 MovieMind Session")
+        print("================================")
+        print("🟢 Session started.")
+        print("🎬 VLC playback monitoring: ON")
+        print("🧠 Background movie understanding: ON")
+        print("⏱️ Checkpoints: approximately every 10 minutes")
+        print("⏳ Maximum active movie time: 2 hours 30 minutes")
+        print()
+        print("F8 → Ask MovieMind")
+        print()
 
         self.monitor_thread = threading.Thread(
             target=self.monitor_loop,
@@ -101,7 +93,7 @@ class MovieSessionManager:
 
 
     # =========================================================
-    # STOP SESSION
+    # STOP
     # =========================================================
 
     def stop(self, reason="Manual stop"):
@@ -113,6 +105,7 @@ class MovieSessionManager:
 
             self.active = False
             self.paused = False
+
             self.stop_reason = reason
 
         print()
@@ -124,9 +117,12 @@ class MovieSessionManager:
         )
 
         if self.on_stop:
+
             try:
                 self.on_stop(reason)
+
             except Exception as e:
+
                 print(f"⚠️ Stop callback error: {e}")
 
 
@@ -143,14 +139,18 @@ class MovieSessionManager:
 
             self.paused = True
 
+        print()
         print("⏸️ Movie paused.")
         print("🧠 MovieMind memory preserved.")
         print("⏱️ Background monitoring paused.")
 
         if self.on_pause:
+
             try:
                 self.on_pause()
+
             except Exception as e:
+
                 print(f"⚠️ Pause callback error: {e}")
 
 
@@ -167,22 +167,26 @@ class MovieSessionManager:
 
             self.paused = False
 
-            # Restart the checkpoint timer.
+            self.last_state_check = time.time()
             self.last_checkpoint_time = time.time()
 
+        print()
         print("▶️ Movie resumed.")
         print("🧠 MovieMind monitoring resumed.")
         print("💾 Existing movie memory preserved.")
 
         if self.on_resume:
+
             try:
                 self.on_resume()
+
             except Exception as e:
+
                 print(f"⚠️ Resume callback error: {e}")
 
 
     # =========================================================
-    # BACKGROUND MONITOR
+    # MAIN MONITOR
     # =========================================================
 
     def monitor_loop(self):
@@ -196,50 +200,90 @@ class MovieSessionManager:
                 if not self.active:
                     break
 
+
                 # -------------------------------------------------
-                # 1. Check whether media player still exists
+                # VLC PROCESS CHECK
                 # -------------------------------------------------
 
-                if not self.media_player_running():
+                if not self.vlc_running():
 
                     self.stop(
-                        "Media player closed or movie session ended."
+                        "VLC was closed."
                     )
 
                     break
 
 
                 # -------------------------------------------------
-                # 2. Determine whether movie is playing/paused
+                # VLC PLAYBACK STATE
                 # -------------------------------------------------
 
-                playing = self.detect_movie_playing()
+                state = self.get_vlc_state()
 
 
-                if playing:
+                # =================================================
+                # PLAYING
+                # =================================================
+
+                if state == "PLAYING":
 
                     if self.paused:
+
                         self.resume()
 
-                    # Count only active movie time.
+
                     now = time.time()
 
-                    elapsed = now - self.last_state_check
+                    elapsed = (
+                        now - self.last_state_check
+                    )
 
                     self.active_movie_seconds += elapsed
 
                     self.last_state_check = now
 
-                else:
+
+                # =================================================
+                # PAUSED
+                # =================================================
+
+                elif state == "PAUSED":
 
                     if not self.paused:
+
                         self.pause()
 
                     self.last_state_check = time.time()
 
 
+                # =================================================
+                # STOPPED / ENDED
+                # =================================================
+
+                elif state in (
+                    "STOPPED",
+                    "ENDED",
+                    "ERROR"
+                ):
+
+                    self.stop(
+                        f"VLC state: {state}"
+                    )
+
+                    break
+
+
+                # =================================================
+                # NO MEDIA / UNKNOWN
+                # =================================================
+
+                else:
+
+                    self.last_state_check = time.time()
+
+
                 # -------------------------------------------------
-                # 3. Maximum active movie time
+                # MAXIMUM ACTIVE MOVIE TIME
                 # -------------------------------------------------
 
                 if (
@@ -248,20 +292,22 @@ class MovieSessionManager:
                 ):
 
                     self.stop(
-                        "Maximum 2 hour 30 minute session reached."
+                        "Maximum 2 hour 30 minute active "
+                        "movie time reached."
                     )
 
                     break
 
 
                 # -------------------------------------------------
-                # 4. Ten-minute checkpoint
+                # 10-MINUTE CHECKPOINT
                 # -------------------------------------------------
 
                 if not self.paused:
 
                     elapsed_since_checkpoint = (
-                        time.time() - self.last_checkpoint_time
+                        time.time()
+                        - self.last_checkpoint_time
                     )
 
                     if (
@@ -275,19 +321,24 @@ class MovieSessionManager:
                         print("🧠 ===============================")
                         print("🧠 MovieMind checkpoint reached")
                         print(
-                            f"🧠 Movie time: "
-                            f"{self.format_time(self.active_movie_seconds)}"
+                            "🧠 Active movie time: "
+                            + self.format_time(
+                                self.active_movie_seconds
+                            )
                         )
                         print("🧠 ===============================")
 
                         if self.on_checkpoint:
 
                             try:
+
                                 self.on_checkpoint()
 
                             except Exception as e:
+
                                 print(
-                                    f"⚠️ Checkpoint callback error: {e}"
+                                    "⚠️ Checkpoint callback error:",
+                                    e
                                 )
 
 
@@ -301,143 +352,76 @@ class MovieSessionManager:
 
 
     # =========================================================
-    # CHECK MEDIA PLAYER PROCESS
+    # CHECK VLC PROCESS
     # =========================================================
 
-    def media_player_running(self):
+    def vlc_running(self):
 
         try:
 
             result = subprocess.run(
                 [
                     "tasklist",
-                    "/FO",
-                    "CSV",
-                    "/NH"
+                    "/FI",
+                    "IMAGENAME eq vlc.exe"
                 ],
                 capture_output=True,
                 text=True,
                 creationflags=subprocess.CREATE_NO_WINDOW
             )
 
-            output = result.stdout.lower()
-
-            for process in self.MEDIA_PROCESSES:
-
-                if f'"{process}"' in output:
-                    return True
-
-            return False
+            return (
+                "vlc.exe"
+                in result.stdout.lower()
+            )
 
         except Exception as e:
 
             print(
-                f"⚠️ Could not check media player: {e}"
+                f"⚠️ Could not check VLC process: {e}"
             )
 
-            # Fail-safe:
-            # Don't accidentally close MovieMind because
-            # process detection failed.
+            # Fail safe.
             return True
 
 
     # =========================================================
-    # DETECT PLAYING / PAUSED
+    # GET VLC STATE
     # =========================================================
 
-    def detect_movie_playing(self):
-
-        """
-        First-version heuristic:
-
-        Capture a small portion of the screen twice.
-
-        If the movie frame changes:
-            → probably playing
-
-        If the frame remains unchanged:
-            → probably paused
-
-        This is intentionally lightweight.
-        """
+    def get_vlc_state(self):
 
         try:
 
-            frame1 = self.capture_small_frame()
+            state = self.vlc_player.get_state()
 
-            time.sleep(1.2)
+            # LibVLC state values.
+            state_name = str(state).upper()
 
-            frame2 = self.capture_small_frame()
+            if "PLAYING" in state_name:
+                return "PLAYING"
 
-            if frame1 is None or frame2 is None:
-                return True
+            if "PAUSED" in state_name:
+                return "PAUSED"
 
-            difference = ImageChops.difference(
-                frame1,
-                frame2
-            )
+            if "STOPPED" in state_name:
+                return "STOPPED"
 
-            bbox = difference.getbbox()
+            if "ENDED" in state_name:
+                return "ENDED"
 
-            # No visible change.
-            if bbox is None:
-                return False
+            if "ERROR" in state_name:
+                return "ERROR"
 
-            # Calculate rough difference.
-            histogram = difference.histogram()
-
-            total_difference = sum(
-                value * (index % 256)
-                for index, value in enumerate(histogram)
-            )
-
-            # Very small changes can be subtitles,
-            # clock, mouse movement, etc.
-            if total_difference < 50000:
-                return False
-
-            return True
+            return "UNKNOWN"
 
         except Exception as e:
 
             print(
-                f"⚠️ Playback detection error: {e}"
+                f"⚠️ VLC state error: {e}"
             )
 
-            # Don't pause MovieMind if detection fails.
-            return True
-
-
-    # =========================================================
-    # LIGHTWEIGHT SCREEN CAPTURE
-    # =========================================================
-
-    def capture_small_frame(self):
-
-        try:
-
-            monitor = self.sct.monitors[1]
-
-            screenshot = self.sct.grab(monitor)
-
-            image = Image.frombytes(
-                "RGB",
-                screenshot.size,
-                screenshot.rgb
-            )
-
-            # Downscale heavily.
-            image.thumbnail((320, 180))
-
-            return image
-
-        except Exception as e:
-
-            print(
-                f"⚠️ Screen capture error: {e}"
-            )
-
-            return None
+            return "UNKNOWN"
 
 
     # =========================================================
@@ -458,7 +442,7 @@ class MovieSessionManager:
 
 
     # =========================================================
-    # TIME FORMAT
+    # TIME
     # =========================================================
 
     @staticmethod
@@ -497,6 +481,10 @@ class MovieSessionManager:
             )
 
         try:
-            self.sct.close()
+
+            self.vlc_player.release()
+            self.vlc_instance.release()
+
         except Exception:
+
             pass
