@@ -51,6 +51,13 @@ class MovieMindPlayer:
         self.duration_ms = 0
         self.dragging_seek = False
         self.fullscreen = False
+        self._fullscreen_overlay = None
+        self._overlay_hide_id = None
+        self._overlay_osd_id = None
+        self._overlay_seek = None
+        self._overlay_time = None
+        self._overlay_volume = None
+        self._overlay_osd = None
         self._after_id = None
 
         if vlc is not None:
@@ -78,6 +85,8 @@ class MovieMindPlayer:
         self.root.bind_all("<Right>", self._shortcut_right, add="+")
         self.root.bind_all("<Up>", self._shortcut_up, add="+")
         self.root.bind_all("<Down>", self._shortcut_down, add="+")
+        self.root.bind_all("<Motion>", self._fullscreen_mouse_motion, add="+")
+        self.root.bind_all("<Configure>", self._fullscreen_geometry_changed, add="+")
         self.root.after(250, self._attach_video_surface)
         self._schedule_tick()
 
@@ -344,6 +353,7 @@ class MovieMindPlayer:
         target = max(0, min(100, current + delta))
         self.volume_scale.set(target)
         self._set_volume(str(target))
+        self._show_fullscreen_osd(f"Volume  {target}%")
         return "break"
 
     def seek_by(self, seconds: int) -> str:
@@ -358,6 +368,9 @@ class MovieMindPlayer:
                 if duration and duration > 0:
                     target = min(target, duration)
                 self.player.set_time(target)
+                self._show_fullscreen_osd(
+                    f"{'+' if seconds > 0 else ''}{seconds}s  ·  {self._format_time(target)}"
+                )
             except Exception:
                 pass
         return "break"
@@ -494,9 +507,18 @@ class MovieMindPlayer:
                 if not self.dragging_seek and self.duration_ms > 0:
                     position = max(0.0, min(1000.0, current_ms / self.duration_ms * 1000))
                     self.seek_scale.set(position)
-                self.time_label.config(
-                    text=f"{self._format_time(current_ms)} / {self._format_time(self.duration_ms)}"
-                )
+                time_text = f"{self._format_time(current_ms)} / {self._format_time(self.duration_ms)}"
+                self.time_label.config(text=time_text)
+                if self._overlay_time is not None:
+                    try:
+                        self._overlay_time.config(text=time_text)
+                    except tk.TclError:
+                        pass
+                if self._overlay_seek is not None and not self.dragging_seek:
+                    try:
+                        self._overlay_seek.set(position)
+                    except tk.TclError:
+                        pass
             if self.player.is_playing():
                 self.status_label.config(text="PLAYING", fg="#86efac")
         except Exception:
@@ -704,8 +726,7 @@ class MovieMindPlayer:
             pass
 
     def toggle_fullscreen(self) -> None:
-        # Schedule layout/handle work after Tk has applied the new window geometry.
-        # This avoids forcing an immediate native VLC surface rebind during the transition.
+        # Keep the VLC HWND alive and use a separate overlay window for controls.
         self.fullscreen = not self.fullscreen
         if self.fullscreen:
             self.header.pack_forget()
@@ -715,24 +736,212 @@ class MovieMindPlayer:
             self.body.pack_configure(fill="both", expand=True, padx=0, pady=0)
             self.video_frame.pack_configure(fill="both", expand=True)
             self.root.attributes("-fullscreen", True)
+            self.root.after_idle(self._finish_fullscreen_transition)
         else:
+            self._destroy_fullscreen_overlay()
             self.root.attributes("-fullscreen", False)
             self.header.pack(fill="x", padx=16, pady=(12, 8))
             self.body.pack_configure(fill="both", expand=True, padx=16, pady=(0, 10))
             self.companion.pack(side="right", fill="y", padx=(12, 0))
             self.controls.pack(fill="x", padx=16, pady=(0, 14))
             self.buttons.pack(fill="x", padx=16, pady=(0, 16))
-        self.root.after_idle(self._finish_fullscreen_transition)
+            self.root.after_idle(self._finish_fullscreen_transition)
 
     def _finish_fullscreen_transition(self) -> None:
         try:
             self.root.update_idletasks()
-            # The native video host keeps the same window handle; do not rebind it
-            # during fullscreen transitions, as that can briefly blank/flicker video.
             if self.fullscreen:
-                self.video_frame.focus_set()
+                self._create_fullscreen_overlay()
+                self._show_fullscreen_overlay()
         except tk.TclError:
             pass
+
+    def _create_fullscreen_overlay(self) -> None:
+        if self._fullscreen_overlay is not None:
+            try:
+                if self._fullscreen_overlay.winfo_exists():
+                    return
+            except tk.TclError:
+                pass
+
+        overlay = tk.Toplevel(self.root)
+        overlay.overrideredirect(True)
+        overlay.attributes("-topmost", True)
+        overlay.configure(bg="#11141d")
+        try:
+            overlay.attributes("-alpha", 0.94)
+        except tk.TclError:
+            pass
+        self._fullscreen_overlay = overlay
+
+        top = tk.Frame(overlay, bg="#11141d")
+        top.pack(fill="x", padx=14, pady=(8, 2))
+        self._overlay_osd = tk.Label(
+            top, text="", bg="#11141d", fg="#ffffff",
+            font=("Segoe UI", 11, "bold"), anchor="e"
+        )
+        self._overlay_osd.pack(side="right")
+        self._overlay_volume = tk.Scale(
+            top, from_=0, to=100, orient="horizontal", showvalue=True,
+            length=130, bg="#11141d", fg="#ffffff", troughcolor="#3a4052",
+            activebackground=ACCENT, highlightthickness=0, bd=0,
+            command=self._overlay_set_volume
+        )
+        self._overlay_volume.set(self.volume_scale.get())
+        self._overlay_volume.pack(side="right", padx=(8, 14))
+        tk.Label(top, text="VOLUME", bg="#11141d", fg="#cbd5e1",
+                 font=("Segoe UI", 8, "bold")).pack(side="right")
+
+        bottom = tk.Frame(overlay, bg="#11141d")
+        bottom.pack(fill="x", padx=14, pady=(2, 10))
+        self._overlay_time = tk.Label(
+            bottom, text="00:00 / 00:00", bg="#11141d", fg="#e5e7eb",
+            font=("Consolas", 9), width=15
+        )
+        self._overlay_time.pack(side="left", padx=(0, 10))
+        self._overlay_seek = tk.Scale(
+            bottom, from_=0, to=1000, orient="horizontal", showvalue=False,
+            resolution=1, bg="#11141d", fg=TEXT, troughcolor="#3a4052",
+            activebackground=ACCENT, highlightthickness=0, bd=0,
+            command=self._overlay_seek_changed
+        )
+        self._overlay_seek.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self._overlay_seek.bind("<ButtonPress-1>", self._begin_seek)
+        self._overlay_seek.bind("<ButtonRelease-1>", self._end_overlay_seek)
+
+        actions = tk.Frame(overlay, bg="#11141d")
+        actions.pack(fill="x", padx=14, pady=(0, 10))
+        self._button(actions, "−10s", lambda: self.seek_by(-10)).pack(side="left")
+        self._button(actions, "Play / Pause", self.toggle_play, primary=True).pack(
+            side="left", padx=(8, 0)
+        )
+        self._button(actions, "+10s", lambda: self.seek_by(10)).pack(side="left", padx=(8, 0))
+        self._button(actions, "Audio ▾", self.show_audio_menu).pack(side="left", padx=(8, 0))
+        self._button(actions, "Subtitles ▾", self.show_subtitle_menu).pack(side="left", padx=(8, 0))
+        self._button(actions, "Exit Fullscreen", self.toggle_fullscreen).pack(
+            side="right"
+        )
+
+        overlay.bind("<Motion>", self._fullscreen_mouse_motion, add="+")
+        overlay.bind("<Escape>", self._escape_fullscreen, add="+")
+        overlay.bind("<space>", self._space_shortcut, add="+")
+        overlay.bind("<Left>", self._shortcut_left, add="+")
+        overlay.bind("<Right>", self._shortcut_right, add="+")
+        overlay.bind("<Up>", self._shortcut_up, add="+")
+        overlay.bind("<Down>", self._shortcut_down, add="+")
+        self._position_fullscreen_overlay()
+
+    def _position_fullscreen_overlay(self) -> None:
+        overlay = self._fullscreen_overlay
+        if not self.fullscreen or overlay is None:
+            return
+        try:
+            if not overlay.winfo_exists():
+                return
+            width = max(640, self.root.winfo_width())
+            height = 148
+            x = self.root.winfo_rootx()
+            y = self.root.winfo_rooty() + max(0, self.root.winfo_height() - height)
+            overlay.geometry(f"{width}x{height}+{x}+{y}")
+        except tk.TclError:
+            pass
+
+    def _fullscreen_geometry_changed(self, _event=None) -> None:
+        if self.fullscreen:
+            self.root.after_idle(self._position_fullscreen_overlay)
+
+    def _fullscreen_mouse_motion(self, event=None) -> None:
+        if not self.fullscreen:
+            return
+        self._show_fullscreen_overlay()
+        if self._overlay_hide_id is not None:
+            try:
+                self.root.after_cancel(self._overlay_hide_id)
+            except tk.TclError:
+                pass
+        self._overlay_hide_id = self.root.after(2600, self._hide_fullscreen_overlay)
+
+    def _show_fullscreen_overlay(self) -> None:
+        if not self.fullscreen:
+            return
+        self._create_fullscreen_overlay()
+        self._position_fullscreen_overlay()
+        try:
+            self._fullscreen_overlay.deiconify()
+            self._fullscreen_overlay.lift()
+        except tk.TclError:
+            return
+        if self._overlay_hide_id is not None:
+            try:
+                self.root.after_cancel(self._overlay_hide_id)
+            except tk.TclError:
+                pass
+        self._overlay_hide_id = self.root.after(2600, self._hide_fullscreen_overlay)
+
+    def _hide_fullscreen_overlay(self) -> None:
+        self._overlay_hide_id = None
+        if self.fullscreen and self._fullscreen_overlay is not None:
+            try:
+                self._fullscreen_overlay.withdraw()
+            except tk.TclError:
+                pass
+
+    def _destroy_fullscreen_overlay(self) -> None:
+        for attr in ("_overlay_hide_id", "_overlay_osd_id"):
+            task_id = getattr(self, attr, None)
+            if task_id is not None:
+                try:
+                    self.root.after_cancel(task_id)
+                except tk.TclError:
+                    pass
+                setattr(self, attr, None)
+        if self._fullscreen_overlay is not None:
+            try:
+                self._fullscreen_overlay.destroy()
+            except tk.TclError:
+                pass
+        self._fullscreen_overlay = None
+        self._overlay_seek = self._overlay_time = self._overlay_volume = self._overlay_osd = None
+
+    def _overlay_seek_changed(self, value: str) -> None:
+        if self._overlay_seek is None or not self.dragging_seek:
+            return
+        self._seek_changed(value)
+
+    def _end_overlay_seek(self, _event=None) -> None:
+        self.dragging_seek = False
+        if self.player and self.duration_ms > 0 and self._overlay_seek is not None:
+            try:
+                self.player.set_position(max(0.0, min(1.0, self._overlay_seek.get() / 1000.0)))
+            except Exception:
+                pass
+
+    def _overlay_set_volume(self, value: str) -> None:
+        self._set_volume(value)
+        if hasattr(self, "volume_scale"):
+            self.volume_scale.set(value)
+        self._show_fullscreen_osd(f"Volume  {int(float(value))}%")
+
+    def _show_fullscreen_osd(self, message: str) -> None:
+        if not self.fullscreen:
+            return
+        self._show_fullscreen_overlay()
+        if self._overlay_osd is not None:
+            self._overlay_osd.config(text=message)
+        if self._overlay_osd_id is not None:
+            try:
+                self.root.after_cancel(self._overlay_osd_id)
+            except tk.TclError:
+                pass
+        self._overlay_osd_id = self.root.after(1800, self._clear_fullscreen_osd)
+
+    def _clear_fullscreen_osd(self) -> None:
+        self._overlay_osd_id = None
+        if self._overlay_osd is not None:
+            try:
+                self._overlay_osd.config(text="")
+            except tk.TclError:
+                pass
 
     def _escape_fullscreen(self, _event=None) -> None:
         if self.fullscreen:
