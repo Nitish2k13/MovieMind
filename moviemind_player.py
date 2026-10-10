@@ -58,6 +58,8 @@ class MovieMindPlayer:
         self._overlay_time = None
         self._overlay_volume = None
         self._overlay_osd = None
+        self._fullscreen_poll_id = None
+        self._fullscreen_osd_id = None
         self._after_id = None
 
         if vlc is not None:
@@ -87,6 +89,8 @@ class MovieMindPlayer:
         self.root.bind_all("<Down>", self._shortcut_down, add="+")
         self.root.bind_all("<Motion>", self._fullscreen_mouse_motion, add="+")
         self.root.bind_all("<Configure>", self._fullscreen_geometry_changed, add="+")
+        # VLC's native Windows video child does not forward mouse/key events to Tk.
+        # Poll the actual cursor position while fullscreen to reliably reveal controls.
         self.root.after(250, self._attach_video_surface)
         self._schedule_tick()
 
@@ -662,24 +666,39 @@ class MovieMindPlayer:
                 "do not pretend to know the exact line or visual scene."
             )
 
+        # Capture the current video frame so Gemma can interpret the actual visible
+        # subtitle/scene, not merely define a word in isolation.
+        snapshot_path = None
+        try:
+            import tempfile
+            snapshot_path = str(Path(tempfile.gettempdir()) / "moviemind_current_frame.png")
+            if self.player and self.current_path:
+                self.player.video_take_snapshot(0, snapshot_path, 0, 0)
+        except Exception:
+            snapshot_path = None
+
         prompt = (
-            "You are MovieMind, a concise movie companion. Answer the user's question "
-            "helpfully. Use supplied subtitle evidence when present. If there is no subtitle "
-            "evidence, answer general word/phrase meanings where possible and clearly note "
-            "when the exact scene context is unavailable. Never invent what is happening "
-            "visually. Keep the answer to 2-4 sentences.\n"
+            "You are MovieMind, a movie companion. Answer in two clearly labelled parts: "
+            "Simple meaning: define/explain the word or phrase plainly. "
+            "In this movie: explain what the word/line means in the current scene and why "
+            "the speaker likely uses it, based on the screenshot and subtitle evidence. "
+            "If the screenshot or evidence does not support a scene-specific conclusion, "
+            "say what is uncertain rather than inventing details. For dialogue or scene "
+            "questions, answer directly from the available evidence. Keep it concise.\n"
             f"Movie title: {self.movie_title}\n"
             f"Playback time: {self._format_time(current_ms)}\n"
             f"Question: {question}\n"
             f"Timestamped subtitle context:\n{context}"
         )
         self.ai_request_running = True
-        self.answer_label.config(text="Thinking locally…", fg="#c4b5fd")
+        self.answer_label.config(text="Reading the current scene locally…", fg="#c4b5fd")
         self.status_label.config(text="ASKING LOCAL AI…", fg="#c4b5fd")
         import threading
-        threading.Thread(target=self._run_local_ai, args=(prompt,), daemon=True).start()
+        threading.Thread(
+            target=self._run_local_ai, args=(prompt, snapshot_path), daemon=True
+        ).start()
 
-    def _run_local_ai(self, prompt: str) -> None:
+    def _run_local_ai(self, prompt: str, snapshot_path: str | None = None) -> None:
         import json
         import urllib.error
         import urllib.request
@@ -687,12 +706,24 @@ class MovieMindPlayer:
         result = None
         error = None
         try:
-            payload = json.dumps({
+            request_data = {
                 "model": "gemma3:4b",
                 "prompt": prompt,
                 "stream": False,
-                "options": {"temperature": 0.2, "num_predict": 160}
-            }).encode("utf-8")
+                "options": {"temperature": 0.2, "num_predict": 220}
+            }
+            # VLC writes snapshots asynchronously; briefly wait for a usable image.
+            if snapshot_path:
+                import time
+                for _ in range(10):
+                    if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
+                        break
+                    time.sleep(0.1)
+                if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
+                    import base64
+                    with open(snapshot_path, "rb") as image_file:
+                        request_data["images"] = [base64.b64encode(image_file.read()).decode("ascii")]
+            payload = json.dumps(request_data).encode("utf-8")
             request = urllib.request.Request(
                 "http://localhost:11434/api/generate",
                 data=payload,
@@ -755,6 +786,7 @@ class MovieMindPlayer:
             if self.fullscreen:
                 self._create_fullscreen_overlay()
                 self._show_fullscreen_overlay()
+                self._start_fullscreen_poll()
         except tk.TclError:
             pass
 
@@ -841,7 +873,7 @@ class MovieMindPlayer:
             if not overlay.winfo_exists():
                 return
             width = max(640, self.root.winfo_width())
-            height = 148
+            height = 166
             x = self.root.winfo_rootx()
             y = self.root.winfo_rooty() + max(0, self.root.winfo_height() - height)
             overlay.geometry(f"{width}x{height}+{x}+{y}")
@@ -853,15 +885,40 @@ class MovieMindPlayer:
             self.root.after_idle(self._position_fullscreen_overlay)
 
     def _fullscreen_mouse_motion(self, event=None) -> None:
-        if not self.fullscreen:
-            return
-        self._show_fullscreen_overlay()
-        if self._overlay_hide_id is not None:
+        if self.fullscreen:
+            self._show_fullscreen_overlay()
+
+    def _start_fullscreen_poll(self) -> None:
+        if self._fullscreen_poll_id is not None:
             try:
-                self.root.after_cancel(self._overlay_hide_id)
+                self.root.after_cancel(self._fullscreen_poll_id)
             except tk.TclError:
                 pass
-        self._overlay_hide_id = self.root.after(2600, self._hide_fullscreen_overlay)
+        self._fullscreen_poll_id = self.root.after(100, self._poll_fullscreen_cursor)
+
+    def _poll_fullscreen_cursor(self) -> None:
+        self._fullscreen_poll_id = None
+        if not self.fullscreen:
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+            point = wintypes.POINT()
+            if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+                x, y = point.x, point.y
+                left = self.root.winfo_rootx()
+                top = self.root.winfo_rooty()
+                right = left + self.root.winfo_width()
+                bottom = top + self.root.winfo_height()
+                # Reveal controls when cursor reaches the bottom control zone.
+                if left <= x <= right and bottom - 180 <= y <= bottom:
+                    self._show_fullscreen_overlay()
+                elif self._fullscreen_overlay is not None:
+                    self._hide_fullscreen_overlay()
+        except Exception:
+            pass
+        if self.fullscreen:
+            self._fullscreen_poll_id = self.root.after(100, self._poll_fullscreen_cursor)
 
     def _show_fullscreen_overlay(self) -> None:
         if not self.fullscreen:
@@ -889,7 +946,7 @@ class MovieMindPlayer:
                 pass
 
     def _destroy_fullscreen_overlay(self) -> None:
-        for attr in ("_overlay_hide_id", "_overlay_osd_id"):
+        for attr in ("_overlay_hide_id", "_overlay_osd_id", "_fullscreen_poll_id"):
             task_id = getattr(self, attr, None)
             if task_id is not None:
                 try:
