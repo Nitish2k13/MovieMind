@@ -68,14 +68,16 @@ class MovieMindPlayer:
 
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
-        self.root.bind("<Escape>", self._escape_fullscreen)
-        self.root.bind("<space>", self._space_shortcut)
-        self.root.bind("<Control-o>", lambda _event: self.open_file())
-        self.root.bind("<F>", lambda _event: self.toggle_fullscreen())
-        self.root.bind("<Left>", lambda _event: self.seek_by(-5))
-        self.root.bind("<Right>", lambda _event: self.seek_by(5))
-        self.root.bind("<Up>", lambda _event: self.change_volume(5))
-        self.root.bind("<Down>", lambda _event: self.change_volume(-5))
+        # Bind shortcuts at the application level so they work regardless of
+        # which non-text control currently has focus.
+        self.root.bind_all("<Escape>", self._escape_fullscreen, add="+")
+        self.root.bind_all("<space>", self._space_shortcut, add="+")
+        self.root.bind_all("<Control-o>", self._shortcut_open, add="+")
+        self.root.bind_all("<F>", self._shortcut_fullscreen, add="+")
+        self.root.bind_all("<Left>", self._shortcut_left, add="+")
+        self.root.bind_all("<Right>", self._shortcut_right, add="+")
+        self.root.bind_all("<Up>", self._shortcut_up, add="+")
+        self.root.bind_all("<Down>", self._shortcut_down, add="+")
         self.root.after(250, self._attach_video_surface)
         self._schedule_tick()
 
@@ -594,12 +596,6 @@ class MovieMindPlayer:
         if not self.movie_title:
             self.answer_label.config(text="Open a movie and check its title first.", fg=MUTED)
             return
-        if not self.subtitle_context:
-            self.answer_label.config(
-                text="Load an external SRT/VTT subtitle file first. This version uses its "
-                     "timestamped dialogue as context.", fg=MUTED
-            )
-            return
         if self.ai_request_running:
             return
 
@@ -636,13 +632,18 @@ class MovieMindPlayer:
             for item in selected[-22:]
         )
         if not context:
-            context = "No subtitle dialogue found near the current time or matching the question."
+            context = (
+                "No subtitle text has been loaded into MovieMind. The user may be asking "
+                "a general language question. Answer general meanings when possible, but "
+                "do not pretend to know the exact line or visual scene."
+            )
 
         prompt = (
-            "You are MovieMind, a concise movie companion. Answer using only the supplied "
-            "subtitle evidence and the stated movie title. Do not invent visual details or "
-            "claim a character identity unless the dialogue supports it. If the evidence is "
-            "insufficient, say so briefly. Keep the answer to 2-4 sentences.\n"
+            "You are MovieMind, a concise movie companion. Answer the user's question "
+            "helpfully. Use supplied subtitle evidence when present. If there is no subtitle "
+            "evidence, answer general word/phrase meanings where possible and clearly note "
+            "when the exact scene context is unavailable. Never invent what is happening "
+            "visually. Keep the answer to 2-4 sentences.\n"
             f"Movie title: {self.movie_title}\n"
             f"Playback time: {self._format_time(current_ms)}\n"
             f"Question: {question}\n"
@@ -737,13 +738,46 @@ class MovieMindPlayer:
         if self.fullscreen:
             self.toggle_fullscreen()
 
-    def _space_shortcut(self, event=None) -> str:
-        # Avoid toggling playback when the user is typing into a future chat input.
+    def _is_text_entry_focused(self) -> bool:
         focused = self.root.focus_get()
-        if focused and focused.winfo_class() in ("Entry", "Text", "TEntry"):
-            return "break"
+        return bool(focused and focused.winfo_class() in ("Entry", "Text", "TEntry"))
+
+    def _space_shortcut(self, event=None) -> str:
+        # Preserve normal spaces while typing in title/question fields.
+        if self._is_text_entry_focused():
+            return None
         self.toggle_play()
         return "break"
+
+    def _shortcut_open(self, _event=None) -> str:
+        self.open_file()
+        return "break"
+
+    def _shortcut_fullscreen(self, _event=None) -> str:
+        if not self._is_text_entry_focused():
+            self.toggle_fullscreen()
+            return "break"
+        return None
+
+    def _shortcut_left(self, _event=None) -> str:
+        if not self._is_text_entry_focused():
+            return self.seek_by(-5)
+        return None
+
+    def _shortcut_right(self, _event=None) -> str:
+        if not self._is_text_entry_focused():
+            return self.seek_by(5)
+        return None
+
+    def _shortcut_up(self, _event=None) -> str:
+        if not self._is_text_entry_focused():
+            return self.change_volume(5)
+        return None
+
+    def _shortcut_down(self, _event=None) -> str:
+        if not self._is_text_entry_focused():
+            return self.change_volume(-5)
+        return None
 
     def close(self) -> None:
         if self._after_id is not None:
