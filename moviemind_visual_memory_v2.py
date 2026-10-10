@@ -7,6 +7,7 @@ import base64
 import json
 from io import BytesIO
 import re
+import difflib
 import threading
 import time
 from datetime import datetime
@@ -488,6 +489,35 @@ def clean_ocr_text(text):
         return ""
 
     return cleaned
+
+
+def _exclude_subtitle_from_background_ocr(background_text, subtitle):
+    """Remove OCR lines that are likely the known subtitle, not physical scene text."""
+    if not background_text:
+        return ""
+    if not subtitle or not subtitle.strip():
+        return background_text.strip()
+
+    def normalize(value):
+        return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+    target = normalize(subtitle)
+    if len(target) < 8:
+        return background_text.strip()
+
+    kept = []
+    for raw_line in background_text.splitlines():
+        line = raw_line.strip()
+        candidate = normalize(line)
+        if not candidate:
+            continue
+        # Exact/near-exact subtitle matches are not background signs or labels.
+        similarity = difflib.SequenceMatcher(None, candidate, target).ratio()
+        if candidate in target or target in candidate or similarity >= 0.68:
+            continue
+        kept.append(line)
+
+    return "\n".join(kept).strip()
 
 
 def extract_text(image):
@@ -1523,10 +1553,12 @@ def inspect_current_frame_for_hidden_details():
         prompt = f"""Inspect this screenshot for potential VISUAL Easter-egg clues inside the movie/video picture only.
 Ignore MovieMind, Windows, desktop icons, taskbar, browser/application chrome, player controls, and all computer UI.
 
-OCR CLUES (may contain unrelated UI text or OCR mistakes): {full_frame_text[:1800]}
+BACKGROUND OCR CLUES (may contain UI text, subtitles, or OCR mistakes): {full_frame_text[:1800]}
+KNOWN SUBTITLE/DIALOGUE (context only, not a physical sign or label): {current_frame.get("subtitle", "")}
 
 IMPORTANT EVIDENCE RULES:
 - Report observable physical details, not guesses about who a person is.
+- If OCR text matches or closely resembles the known subtitle/dialogue, treat it as subtitles, NOT as a sign, poster, label, or background object.
 - Do NOT name actors or movie characters. Do not infer that a known cast member is present because they belong to this film.
 - Do not infer a scene from the movie title, subtitles, or general plot knowledge.
 - For each possible clue, describe what is visibly there and state if it is too small/unclear to read.
@@ -1537,6 +1569,16 @@ First output MOVIE_REGION_JSON: followed by a JSON object with bbox_1000
 ([left,top,right,bottom], normalized 0-1000) around the actual movie/video picture only.
 Exclude desktop, MovieMind, OS/taskbar, player controls, and application chrome. If unsure,
 use [0,0,1000,1000].
+
+Then output VISUAL_INVENTORY_JSON: followed by ONE JSON array of concrete physical clues
+visible in the movie picture. Each object MUST have:
+- type: one of sign, poster, logo, object, prop, book, newspaper, vehicle, plate, symbol, number, label, screen, other
+- description: short description of what is physically visible
+- observed_text: exact readable text only, otherwise empty string
+- confidence: high, medium, or low
+Do NOT include actor names, character identities, plot guesses, relationships, or scene summaries.
+Do NOT invent unreadable text. Use [] when no concrete visual clue is visible.
+
 Then output PLATE_CANDIDATES_JSON: followed by a JSON array. Each object must
 have vehicle (short visual description, no character/actor guesses), plate_text (exactly readable characters or UNKNOWN),
 confidence (high/medium/low), and bbox_1000 ([left,top,right,bottom] normalized 0-1000
@@ -1551,7 +1593,7 @@ Never guess unreadable plate characters or claim a plate is an Easter egg.
                 "images": [image_base64]
             }],
             "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 150}
+            "options": {"temperature": 0.1, "num_predict": 350}
         }
         response = requests.post(OLLAMA_URL, json=data, timeout=90)
         response.raise_for_status()
@@ -1562,6 +1604,10 @@ Never guess unreadable plate characters or claim a plate is an Easter egg.
             region_ocr = _ocr_movie_region(movie_crop)
             if region_ocr:
                 full_frame_text = region_ocr
+        # The known subtitle is dialogue context, not a physical sign/label.
+        full_frame_text = _exclude_subtitle_from_background_ocr(
+            full_frame_text, current_frame.get("subtitle", "")
+        )
         plate_clues.extend(_collect_plate_clues(image, visual_candidates, "current frame"))
     except Exception as error:
         visual_candidates = f"Local visual inspection could not complete: {error}"
@@ -1616,6 +1662,9 @@ Then output PLATE_CANDIDATES_JSON: an array of objects with vehicle (visual desc
             historical_region = _parse_movie_region(text)
             historical_crop = _crop_normalized_region(historical_image, historical_region)
             historical_ocr = _ocr_movie_region(historical_crop)
+            historical_ocr = _exclude_subtitle_from_background_ocr(
+                historical_ocr, item.get("subtitle", "")
+            )
             if historical_ocr:
                 historical_movie_ocr.append(
                     f"[{item.get('timestamp', '?')}] Movie-region OCR: {historical_ocr[:500]}"
@@ -1648,139 +1697,375 @@ Then output PLATE_CANDIDATES_JSON: an array of objects with vehicle (visual desc
     return full_frame_text, visual_candidates, plate_summary
 
 
-def perform_easter_egg_research(movie_title=""):
-    """Research visual Easter-egg clues only, on explicit request; do not infer cast presence."""
-    subtitle = current_frame.get("subtitle", "")
-    visual_history = build_visual_memory_context()
-    full_frame_text, visual_candidates, plate_summary = inspect_current_frame_for_hidden_details()
+def _parse_visual_inventory(model_text):
+    """Parse the structured visual inventory emitted by the local vision model."""
+    marker = "VISUAL_INVENTORY_JSON:"
+    if marker not in (model_text or ""):
+        return []
 
+    raw = model_text.split(marker, 1)[1].strip()
+    # The inventory is expected to be one JSON array. JSONDecoder.raw_decode lets
+    # us stop exactly at the end of the array even when later markers follow it.
+    start = raw.find("[")
+    if start < 0:
+        return []
+
+    try:
+        value, _ = json.JSONDecoder().raw_decode(raw[start:])
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return []
+
+    return value if isinstance(value, list) else []
+
+
+def _normalize_visual_inventory(items):
+    """Keep only concrete, frame-grounded visual clues; never manufacture missing fields."""
+    normalized = []
+    allowed_types = {
+        "sign", "poster", "logo", "object", "prop", "book", "newspaper",
+        "vehicle", "plate", "symbol", "number", "label", "screen", "other"
+    }
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        clue_type = str(item.get("type", "other")).strip().lower()
+        if clue_type not in allowed_types:
+            clue_type = "other"
+
+        description = " ".join(str(item.get("description", "")).split()).strip()
+        observed_text = " ".join(str(item.get("observed_text", "")).split()).strip()
+        confidence = str(item.get("confidence", "low")).strip().lower()
+
+        if confidence not in {"high", "medium", "low"}:
+            confidence = "low"
+
+        # Ignore vague scene-level descriptions. Hidden Details needs a physical clue.
+        if len(description) < 4:
+            continue
+        if any(word in description.lower() for word in (
+            "the actor", "the actress", "this character", "main character",
+            "cast member", "looks like ", "probably ", "might be ", "appears to be",
+        )):
+            continue
+
+        if observed_text.lower() in {"unknown", "unreadable", "none", "n/a"}:
+            observed_text = ""
+
+        normalized.append({
+            "type": clue_type,
+            "description": description[:180],
+            "observed_text": observed_text[:120],
+            "confidence": confidence,
+        })
+
+    # Deduplicate near-identical clues while preserving model order.
+    unique = []
+    seen = set()
+    for item in normalized:
+        key = (
+            item["type"],
+            re.sub(r"[^a-z0-9]+", " ", item["description"].lower()).strip(),
+            re.sub(r"[^a-z0-9]+", " ", item["observed_text"].lower()).strip(),
+        )
+        if key not in seen:
+            seen.add(key)
+            unique.append(item)
+
+    return unique[:8]
+
+
+def _clue_search_terms(clue):
+    """Build focused queries from one observed clue, not from the movie's general lore."""
+    observed_text = clue.get("observed_text", "").strip()
+    description = clue.get("description", "").strip()
+    clue_type = clue.get("type", "other")
+
+    terms = []
+    if observed_text:
+        terms.append(observed_text)
+
+    # Keep descriptions compact so OCR/vision noise does not become a giant query.
+    compact_description = re.sub(r"[^A-Za-z0-9 -]+", " ", description)
+    compact_description = " ".join(compact_description.split())[:110]
+    if compact_description and compact_description.lower() != observed_text.lower():
+        terms.append(compact_description)
+
+    type_term = {
+        "sign": "sign",
+        "poster": "poster",
+        "logo": "logo",
+        "vehicle": "vehicle",
+        "plate": "license plate",
+        "number": "number",
+        "book": "book",
+        "newspaper": "newspaper",
+        "symbol": "symbol",
+        "object": "prop",
+        "prop": "prop",
+        "label": "label",
+        "screen": "screen",
+    }.get(clue_type, "visual detail")
+
+    return terms, type_term
+
+
+def _research_single_visual_clue(movie_title, clue):
+    """Search one visual clue independently so evidence cannot bleed between clues."""
+    terms, type_term = _clue_search_terms(clue)
+    if not terms:
+        return {"clue": clue, "results": [], "queries": [], "status": "NOT VERIFIED"}
+
+    queries = []
+    for term in terms[:2]:
+        queries.append(f'"{movie_title}" "{term}" {type_term} easter egg')
+        queries.append(f'"{movie_title}" "{term}" visual reference')
+
+    # Exact readable text gets one stricter query. This is especially useful for
+    # signs, labels, numbers, posters, and plates.
+    if clue.get("observed_text"):
+        exact = clue["observed_text"].strip()
+        if 2 <= len(exact) <= 80:
+            queries.insert(0, f'"{movie_title}" "{exact}"')
+
+    queries = list(dict.fromkeys(q.strip() for q in queries if q.strip()))[:4]
+    results = []
+    errors = []
+    seen_urls = set()
+
+    for query in queries:
+        try:
+            batch, batch_errors = search_web_results(query, limit=6)
+            errors.extend(batch_errors)
+            for result in batch:
+                url = result.get("url", "")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    result = dict(result)
+                    result["query"] = query
+                    results.append(result)
+        except Exception as error:
+            errors.append(f"{query}: {type(error).__name__}")
+
+    # Remove generic cast/plot/post-credit pages at the evidence layer too.
+    nonvisual_terms = (
+        "full cast", "cast list", "cast of", "character list", "plot summary",
+        "post-credit", "post credits", "cameo appearance", "cameo appearances"
+    )
+    filtered = []
+    for result in results:
+        title = str(result.get("title", "")).lower()
+        if any(term in title for term in nonvisual_terms):
+            continue
+        filtered.append(result)
+
+    return {
+        "clue": clue,
+        "results": filtered[:12],
+        "queries": queries,
+        "errors": list(dict.fromkeys(errors))[:6],
+        "status": "UNASSESSED",
+    }
+
+
+def _score_visual_evidence(research):
+    """Conservative pre-score used to keep unsupported web matches out of CONFIRMED."""
+    clue = research.get("clue", {})
+    results = research.get("results", [])
+    if not results:
+        return "NOT VERIFIED"
+
+    confidence = clue.get("confidence", "low")
+    observed = clue.get("observed_text", "").lower().strip()
+    description = clue.get("description", "").lower()
+
+    # We deliberately do not auto-confirm from search volume. Search results are leads;
+    # the final local model must still determine whether a source explicitly supports the
+    # same clue in the same movie.
+    strong_match = False
+    for result in results:
+        haystack = (
+            str(result.get("title", "")) + " " + str(result.get("snippet", ""))
+        ).lower()
+        if observed and len(observed) >= 3 and observed in haystack:
+            strong_match = True
+            break
+        # For non-text clues, require multiple descriptive terms to overlap.
+        words = [w for w in re.findall(r"[a-z0-9]+", description) if len(w) >= 4]
+        overlap = sum(1 for word in set(words) if word in haystack)
+        if overlap >= 2:
+            strong_match = True
+            break
+
+    if strong_match and confidence == "high":
+        return "POSSIBLE"
+    if strong_match:
+        return "POSSIBLE"
+    return "NOT VERIFIED"
+
+
+def _build_evidence_research_prompt(movie_title, research_items):
+    """Build a strict per-clue evidence packet for one final synthesis call."""
+    packets = []
+    for index, item in enumerate(research_items, start=1):
+        clue = item.get("clue", {})
+        source_lines = []
+        for source_index, result in enumerate(item.get("results", [])[:8], start=1):
+            source_lines.append(
+                f"SOURCE {source_index}: {result.get('title', 'Untitled')}\n"
+                f"URL: {result.get('url', '')}\n"
+                f"SNIPPET: {result.get('snippet', '')[:700]}"
+            )
+        packets.append(
+            f"CLUE {index}\n"
+            f"Type: {clue.get('type', '')}\n"
+            f"Observed description: {clue.get('description', '')}\n"
+            f"Observed text: {clue.get('observed_text', '') or '(none)'}\n"
+            f"Visual confidence: {clue.get('confidence', 'low')}\n"
+            f"Search queries: {item.get('queries', [])}\n"
+            f"Pre-score: {_score_visual_evidence(item)}\n"
+            f"Independent evidence:\n{chr(10).join(source_lines) if source_lines else '(no usable sources)'}"
+        )
+
+    return "\n\n".join(packets)
+
+
+def perform_easter_egg_research(movie_title=""):
+    """Evidence-first Hidden Details: observe first, research each clue independently, then verify."""
     title = (movie_title or "").strip()
     if not title:
         return (
             "MOVIE TITLE REQUIRED\n\n"
-            "Enter the movie name so MovieMind can search for documented visual references. "
-            "The title is search context only; it is not evidence that a particular actor or character appears in this frame."
+            "Enter the movie name so MovieMind can research documented visual references."
         )
 
-    # Search only grounded visual clues. Do not seed search with scene-analysis character
-    # names, the cast list, or dialogue: those can make unrelated film appearances look
-    # like evidence for the current frame.
-    queries = [
-        f'"{title}" visual easter eggs background props posters logos signs hidden details',
-    ]
-    ocr_terms = []
-    for line in full_frame_text.splitlines():
-        cleaned = " ".join(line.split()).strip(" |:;,.\t")
-        if len(cleaned) >= 4 and not cleaned.startswith("["):
-            ocr_terms.append(cleaned[:90])
-    # OCR is only a lead. Keep the query short and avoid searching UI noise wholesale.
-    if ocr_terms:
-        ocr_query = " ".join(ocr_terms[:4])[:220]
-        queries.append(f'"{title}" "{ocr_query}" poster logo sign prop reference')
+    subtitle = current_frame.get("subtitle", "")
+    visual_history = build_visual_memory_context()
+    full_frame_text, visual_candidates, plate_summary = inspect_current_frame_for_hidden_details()
 
-    plate_strings = []
-    for match in re.finditer(r"possible plate '([^']+)'", plate_summary):
-        value = match.group(1).strip().upper()
-        compact = re.sub(r"[^A-Z0-9]", "", value)
-        if 3 <= len(compact) <= 12 and compact not in plate_strings:
-            plate_strings.append(compact)
-    for plate in plate_strings[:3]:
-        queries.append(f'"{plate}" "{title}" license plate visual easter egg')
-        queries.append(f'"{plate}" "{title}" documented production reference')
+    # The local vision response is the observation stage. Web search is deliberately
+    # downstream of it; the movie title never creates a clue by itself.
+    inventory = _normalize_visual_inventory(_parse_visual_inventory(visual_candidates))
 
-    queries = list(dict.fromkeys(q.strip() for q in queries if q.strip()))
-    all_results = []
-    search_errors = []
-    for query in queries:
-        try:
-            results, errors = search_web_results(query, limit=8)
-            search_errors.extend(errors)
-            for result in results:
-                url = result.get("url", "")
-                if url and url not in {item.get("url") for item in all_results}:
-                    result["query"] = query
-                    all_results.append(result)
-        except Exception as error:
-            search_errors.append(f'{query}: {type(error).__name__}: {error}')
+    # Plate inspection is already a separate visual sensor. Add it only when a concrete
+    # plate reading exists; never convert an unreadable plate into a guessed string.
+    for match in re.finditer(r"possible plate '([^']+)'", plate_summary or ""):
+        plate = match.group(1).strip()
+        if plate and not any(
+            item.get("type") == "plate" and item.get("observed_text", "").upper() == plate.upper()
+            for item in inventory
+        ):
+            inventory.append({
+                "type": "plate",
+                "description": "License plate observed on a visible vehicle",
+                "observed_text": plate,
+                "confidence": "medium" if "OCR-readable" in match.group(0) else "low",
+            })
 
-    # Drop obviously non-visual pages (cast lists, character databases, plot summaries,
-    # and post-credit/cameo articles). Such pages are especially likely to cause the
-    # model to attribute a character from another scene to the current frame.
-    nonvisual_title_terms = (
-        "full cast", "cast list", "cast of", " cast ", "characters list", "character list",
-        "plot summary", "post-credit scene", "post credits scene", "post-credit",
-        "post credits", "cameo appearances", "cameo appearance",
-    )
-    filtered_results = []
-    for item in all_results:
-        title_text = str(item.get("title", "")).lower()
-        if any(term in title_text for term in nonvisual_title_terms):
-            continue
-        filtered_results.append(item)
-    all_results = filtered_results[:20]
-    if not all_results:
-        unique_errors = list(dict.fromkeys(search_errors))
-        reason = "\n".join(unique_errors[:5]) if unique_errors else "The reachable search sources returned no usable matches."
+    if not inventory:
         return (
-            "ONLINE RESEARCH COULD NOT VERIFY A VISUAL EASTER EGG\n\n"
-            "This does not prove that the frame contains no hidden detail. Search sources returned no usable evidence.\n\n"
-            f"Local visual inspection (unverified candidates):\n{visual_candidates}\n\n"
-            f"Movie-region/background OCR clues (may be wrong):\n{full_frame_text[:1000] or 'No readable text detected.'}\n\n"
-            f"Plate inspection:\n{plate_summary}\n\nSearch diagnostics:\n{reason}"
+            "🔎 HIDDEN DETAILS\n\n"
+            "No concrete visual clue was extracted from the current movie frame.\n\n"
+            "MovieMind will not invent an Easter egg from the movie title, subtitle, cast, "
+            "or general movie knowledge. Try again on a frame where a poster, sign, logo, "
+            "prop, vehicle, number, or readable label is clearly visible."
         )
 
-    source_text = "\n\n".join(
-        f"[{i}] {item.get('title', 'Untitled result')}\nProvider: {item.get('provider', 'Web search')}\nURL: {item['url']}\nSnippet: {item.get('snippet', '')}"
-        for i, item in enumerate(all_results, start=1)
-    )
+    # Research every clue independently. This is the critical separation that prevents
+    # evidence for one object from accidentally becoming evidence for another object.
+    research_items = []
+    for clue in inventory:
+        research_items.append(_research_single_visual_clue(title, clue))
+
+    evidence_packet = _build_evidence_research_prompt(title, research_items)
     language_instruction = get_language_instruction()
-    synthesis_prompt = f"""You are MovieMind's evidence-first researcher for VISUAL Easter eggs only.
+    synthesis_prompt = f"""You are MovieMind's final evidence verifier for VISUAL HIDDEN DETAILS.
 {language_instruction}
 
-GOAL: investigate concrete visual details such as background posters, signs, logos, symbols,
-props, books/newspapers, readable labels, and vehicle license plates. Do not turn this into
-a general cast, plot, or dialogue-Easter-egg summary.
+MOVIE TITLE: {title}
+The movie title is search context only. It is NOT evidence that a person, prop, or event is
+present in the current frame.
 
-MOVIE TITLE (search context only, NOT proof of what is in this frame): {title}
-CURRENT SUBTITLE (context only; NOT evidence of who is visible): {subtitle}
-BACKGROUND/OCR TEXT (may be from UI or contain recognition errors): {full_frame_text[:2200]}
-LOCAL VISUAL MODEL OUTPUT (unverified candidates; it can hallucinate): {visual_candidates[:4500]}
-PLATE CANDIDATES (may be uncertain): {plate_summary}
-LIGHTWEIGHT MONITORING NOTES (can contain OCR noise; not identity evidence): {visual_history[:1800]}
+CURRENT SUBTITLE (context only, never a visual clue): {subtitle}
+BACKGROUND OCR (may be wrong): {full_frame_text[:1800]}
+LOCAL VISUAL OBSERVATION OUTPUT (may be wrong): {visual_candidates[:5000]}
+PLATE SENSOR OUTPUT (may be wrong): {plate_summary[:1800]}
 
-WEB SEARCH RESULTS (snippets are leads, not proof):
-{source_text}
+INDEPENDENT CLUE RESEARCH:
+{evidence_packet}
 
-STRICT RULES:
-- Never name an actor or movie character as present in the current frame. This feature is about visual props/details; do not infer cast presence from the movie's cast list, plot, subtitles, or an actor's known role.
-- In particular, a source saying someone appears elsewhere in the film (including a post-credit scene) does NOT establish that person appears in this current frame.
-- Do not use the previous scene summary or character memory as proof of what is in the screenshot.
-- Only describe a physical clue if it appears in the OCR or local visual candidates, and label uncertain OCR/model output as unverified. Do not claim you personally can see a detail beyond the provided evidence.
-- A web page can support the meaning of a clue only if it explicitly discusses the same prop/text/logo/plate and the same film. Generic film trivia, cast lists, and unrelated scenes do not corroborate a current-frame finding.
-- If the screenshot evidence does not establish a clue, say "not enough visual evidence" rather than guessing.
-- For license plates, quote the observed string and whether OCR corroborated it. Never infer an actor birthday, wedding date, or production reference from a coincidental number. State a connection only if a source explicitly links that exact plate to that reference in this film.
-- Distinguish CONFIRMED (direct evidence for this exact visual clue), POSSIBLE (plausible but not confirmed), and NOT VERIFIED.
-- Cite a web result as [n] only when its snippet actually supports the specific claim. Do not cite generic pages to make an unsupported claim look verified.
-- If no specific visual Easter egg is supported, say so plainly. Do not fill space with general movie trivia.
-- Be concise and practical.
+STRICT VERIFICATION RULES:
+1. Work clue-by-clue. Evidence for CLUE 1 can NEVER verify CLUE 2.
+2. CONFIRMED requires BOTH: the physical clue is reasonably supported by the frame observation AND a source explicitly connects that same clue to this same movie/reference.
+3. POSSIBLE means the clue is plausible and/or a source is suggestive, but the exact connection is not independently established.
+4. NOT VERIFIED means the clue or its connection cannot be established. This is a valid successful result.
+5. Never infer a character or actor from a cast list, movie title, subtitle, plot, or a source saying the actor appears elsewhere in the film.
+6. Never turn subtitle text into a poster/sign/background clue.
+7. Never infer a plate meaning from a coincidence such as a birthday, wedding date, actor number, or production date unless a source explicitly makes that exact connection for this movie.
+8. Do not treat a search-result count, generic fan page, or unrelated trivia page as confirmation.
+9. Do not invent a clue that is not in the observation packet.
+10. If the source only says that a similar object exists in the movie but does not establish the observed detail/reference, use POSSIBLE or NOT VERIFIED.
+11. Cite sources as [CLUE n / SOURCE m] only when that source directly supports that clue's specific claim.
+12. Keep the final answer concise. Prefer a small number of strong findings over a long list of weak guesses.
+
+OUTPUT FORMAT:
+🔎 HIDDEN DETAILS
+
+For each finding:
+1. <emoji> <short clue name>
+   Observed: <what was actually observed>
+   Status: CONFIRMED / POSSIBLE / NOT VERIFIED
+   Connection: <specific reference, or why it is not verified>
+   Evidence: [CLUE n / SOURCE m]
+
+Then add:
+"Why this is reliable:" followed by one short sentence explaining that MovieMind separated visual observation from web verification.
+
+If nothing reaches CONFIRMED or POSSIBLE, say:
+"No verified visual hidden detail found in this frame."
+Do not pad the response with general movie trivia.
 """
 
-    answer = ask_text_gemma(synthesis_prompt).strip()
-
-    # Only show sources that the synthesis actually cited. This avoids presenting a
-    # generic film/cast result as if it supported a frame-specific finding.
-    cited_numbers = sorted({int(n) for n in re.findall(r"\[(\d{1,2})\]", answer)
-                            if 1 <= int(n) <= len(all_results)})
-    if cited_numbers:
-        source_list = "\n\nSources cited for the findings above:\n" + "\n".join(
-            f"[{i}] {all_results[i-1].get('title', 'Untitled result')} — {all_results[i-1]['url']}"
-            for i in cited_numbers
+    try:
+        answer = ask_text_gemma(synthesis_prompt).strip()
+    except Exception as error:
+        return (
+            "🔎 HIDDEN DETAILS\n\n"
+            "The visual clues were extracted, but final verification could not be completed.\n\n"
+            f"Reason: {type(error).__name__}: {error}\n\n"
+            "MovieMind did not convert the unverified web leads into confirmed Easter eggs."
         )
+
+    # Append only sources that the verifier explicitly cited in the expected format.
+    cited = []
+    for clue_no, source_no in re.findall(r"\[CLUE\s+(\d+)\s*/\s*SOURCE\s+(\d+)\]", answer, re.I):
+        clue_index = int(clue_no) - 1
+        source_index = int(source_no) - 1
+        if 0 <= clue_index < len(research_items):
+            sources = research_items[clue_index].get("results", [])
+            if 0 <= source_index < len(sources):
+                cited.append((clue_no, source_no, sources[source_index]))
+
+    if cited:
+        lines = ["\n\nSources used for the findings above:"]
+        seen = set()
+        for clue_no, source_no, source in cited:
+            key = source.get("url", "")
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(
+                f"[CLUE {clue_no} / SOURCE {source_no}] {source.get('title', 'Untitled')} — {source.get('url', '')}"
+            )
+        answer += "\n" + "\n".join(lines)
     else:
-        source_list = "\n\nNo search result was cited as directly verifying a frame-specific visual Easter egg."
-    if search_errors:
-        source_list += "\n\nSome search providers were unavailable, so research may be incomplete."
-    return answer + source_list
+        answer += "\n\nNo web source was explicitly accepted as direct evidence for a frame-specific finding."
+
+    if any(item.get("errors") for item in research_items):
+        answer += "\n\nSome search providers were unavailable, so the online verification may be incomplete."
+
+    return answer
 
 
 # ==========================================
