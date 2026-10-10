@@ -631,7 +631,7 @@ class MovieMindPlayer:
             if key not in seen:
                 seen.add(key)
                 selected.append(item)
-        context = "\\n".join(
+        context = "\n".join(
             f"[{self._format_time(int(item['start_ms']))}] {item['text']}"
             for item in selected[-22:]
         )
@@ -642,11 +642,11 @@ class MovieMindPlayer:
             "You are MovieMind, a concise movie companion. Answer using only the supplied "
             "subtitle evidence and the stated movie title. Do not invent visual details or "
             "claim a character identity unless the dialogue supports it. If the evidence is "
-            "insufficient, say so briefly. Keep the answer to 2-4 sentences.\\n"
-            f"Movie title: {self.movie_title}\\n"
-            f"Playback time: {self._format_time(current_ms)}\\n"
-            f"Question: {question}\\n"
-            f"Timestamped subtitle context:\\n{context}"
+            "insufficient, say so briefly. Keep the answer to 2-4 sentences.\n"
+            f"Movie title: {self.movie_title}\n"
+            f"Playback time: {self._format_time(current_ms)}\n"
+            f"Question: {question}\n"
+            f"Timestamped subtitle context:\n{context}"
         )
         self.ai_request_running = True
         self.answer_label.config(text="Thinking locally…", fg="#c4b5fd")
@@ -726,7 +726,8 @@ class MovieMindPlayer:
     def _finish_fullscreen_transition(self) -> None:
         try:
             self.root.update_idletasks()
-            self._attach_video_surface()
+            # The native video host keeps the same window handle; do not rebind it
+            # during fullscreen transitions, as that can briefly blank/flicker video.
             if self.fullscreen:
                 self.video_frame.focus_set()
         except tk.TclError:
