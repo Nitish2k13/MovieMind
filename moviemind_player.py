@@ -69,6 +69,10 @@ class MovieMindPlayer:
         self.root.bind("<space>", self._space_shortcut)
         self.root.bind("<Control-o>", lambda _event: self.open_file())
         self.root.bind("<F>", lambda _event: self.toggle_fullscreen())
+        self.root.bind("<Left>", lambda _event: self.seek_by(-5))
+        self.root.bind("<Right>", lambda _event: self.seek_by(5))
+        self.root.bind("<Up>", lambda _event: self.change_volume(5))
+        self.root.bind("<Down>", lambda _event: self.change_volume(-5))
         self.root.after(250, self._attach_video_surface)
         self._schedule_tick()
 
@@ -76,8 +80,9 @@ class MovieMindPlayer:
             self.root.after(100, self._show_missing_binding)
 
     def _build_ui(self) -> None:
-        header = tk.Frame(self.root, bg=BG)
-        header.pack(fill="x", padx=16, pady=(12, 8))
+        self.header = tk.Frame(self.root, bg=BG)
+        self.header.pack(fill="x", padx=16, pady=(12, 8))
+        header = self.header
 
         tk.Label(
             header, text="🎬 MovieMind", bg=BG, fg=TEXT,
@@ -90,17 +95,19 @@ class MovieMindPlayer:
         )
         self.file_label.pack(side="right", fill="x", expand=True, padx=(18, 0))
 
-        body = tk.Frame(self.root, bg=BG)
-        body.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+        self.body = tk.Frame(self.root, bg=BG)
+        self.body.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+        body = self.body
 
         self.video_frame = tk.Frame(body, bg="#050608", highlightthickness=1,
                                     highlightbackground="#303645")
         self.video_frame.pack(side="left", fill="both", expand=True)
 
         # Reserved space for the embedded AI companion. No AI is started in Phase 1.
-        companion = tk.Frame(body, bg=PANEL, width=290)
-        companion.pack(side="right", fill="y", padx=(12, 0))
-        companion.pack_propagate(False)
+        self.companion = tk.Frame(body, bg=PANEL, width=290)
+        self.companion.pack(side="right", fill="y", padx=(12, 0))
+        self.companion.pack_propagate(False)
+        companion = self.companion
 
         tk.Label(
             companion, text="MOVIEMIND AI", bg=PANEL, fg=TEXT,
@@ -126,8 +133,9 @@ class MovieMindPlayer:
             font=("Segoe UI", 9)
         ).pack(anchor="w", padx=14, pady=(0, 12))
 
-        controls = tk.Frame(self.root, bg=BG)
-        controls.pack(fill="x", padx=16, pady=(0, 14))
+        self.controls = tk.Frame(self.root, bg=BG)
+        self.controls.pack(fill="x", padx=16, pady=(0, 14))
+        controls = self.controls
 
         self.time_label = tk.Label(
             controls, text="00:00 / 00:00", bg=BG, fg=MUTED,
@@ -145,13 +153,18 @@ class MovieMindPlayer:
         self.seek_scale.bind("<ButtonPress-1>", self._begin_seek)
         self.seek_scale.bind("<ButtonRelease-1>", self._end_seek)
 
-        buttons = tk.Frame(self.root, bg=BG)
-        buttons.pack(fill="x", padx=16, pady=(0, 16))
+        self.buttons = tk.Frame(self.root, bg=BG)
+        self.buttons.pack(fill="x", padx=16, pady=(0, 16))
+        buttons = self.buttons
 
         self._button(buttons, "Open Movie", self.open_file, primary=True).pack(side="left")
         self._button(buttons, "Play / Pause", self.toggle_play).pack(side="left", padx=(8, 0))
         self._button(buttons, "Stop", self.stop).pack(side="left", padx=(8, 0))
-        self._button(buttons, "Subtitles…", self.open_subtitle).pack(side="left", padx=(8, 0))
+        self.audio_button = self._button(buttons, "Audio Track ▾", self.show_audio_menu)
+        self.audio_button.pack(side="left", padx=(8, 0))
+        self.subtitle_button = self._button(buttons, "Subtitles ▾", self.show_subtitle_menu)
+        self.subtitle_button.pack(side="left", padx=(8, 0))
+        self._button(buttons, "Load Subtitle…", self.open_subtitle).pack(side="left", padx=(8, 0))
         self._button(buttons, "Fullscreen", self.toggle_fullscreen).pack(side="left", padx=(8, 0))
 
         tk.Label(buttons, text="Volume", bg=BG, fg=MUTED).pack(side="left", padx=(20, 6))
@@ -279,9 +292,133 @@ class MovieMindPlayer:
     def _set_volume(self, value: str) -> None:
         if self.player:
             try:
-                self.player.audio_set_volume(int(float(value)))
+                self.player.audio_set_volume(max(0, min(100, int(float(value)))))
             except Exception:
                 pass
+
+    def change_volume(self, delta: int) -> str:
+        """Change volume from keyboard shortcuts: Up/Down = +/- 5%."""
+        current = int(self.volume_scale.get())
+        target = max(0, min(100, current + delta))
+        self.volume_scale.set(target)
+        self._set_volume(str(target))
+        return "break"
+
+    def seek_by(self, seconds: int) -> str:
+        """Skip backward/forward with the left/right arrow keys."""
+        if self.player and self.current_path:
+            try:
+                current = self.player.get_time()
+                if current is None or current < 0:
+                    current = 0
+                duration = self.player.get_length()
+                target = max(0, current + seconds * 1000)
+                if duration and duration > 0:
+                    target = min(target, duration)
+                self.player.set_time(target)
+            except Exception:
+                pass
+        return "break"
+
+    @staticmethod
+    def _track_name(value) -> str:
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
+
+    def _show_track_menu(self, button, menu) -> None:
+        try:
+            menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+        finally:
+            menu.grab_release()
+
+    def show_audio_menu(self) -> None:
+        menu = tk.Menu(self.root, tearoff=0, bg=PANEL, fg=TEXT,
+                       activebackground=ACCENT, activeforeground="white")
+        if not self.player or not self.current_path:
+            menu.add_command(label="Open a movie first", state="disabled")
+        else:
+            try:
+                tracks = self.player.audio_get_track_description() or []
+                current_id = self.player.audio_get_track()
+                if not tracks:
+                    menu.add_command(label="No audio tracks reported by VLC", state="disabled")
+                else:
+                    for track_id, track_name in tracks:
+                        label = self._track_name(track_name)
+                        if int(track_id) == int(current_id):
+                            label = "✓ " + label
+                        menu.add_command(
+                            label=label,
+                            command=lambda tid=int(track_id): self._select_audio_track(tid)
+                        )
+            except Exception as exc:
+                menu.add_command(label=f"Could not read audio tracks: {exc}", state="disabled")
+        self._show_track_menu(self.audio_button, menu)
+
+    def _select_audio_track(self, track_id: int) -> None:
+        if not self.player:
+            return
+        try:
+            result = self.player.audio_set_track(track_id)
+            if result == -1:
+                messagebox.showwarning(
+                    "Audio track", "VLC could not switch to that audio track.", parent=self.root
+                )
+            else:
+                self.status_label.config(text="AUDIO TRACK CHANGED", fg="#c4b5fd")
+        except Exception as exc:
+            messagebox.showerror("Audio track error", str(exc), parent=self.root)
+
+    def show_subtitle_menu(self) -> None:
+        menu = tk.Menu(self.root, tearoff=0, bg=PANEL, fg=TEXT,
+                       activebackground=ACCENT, activeforeground="white")
+        if not self.player or not self.current_path:
+            menu.add_command(label="Open a movie first", state="disabled")
+        else:
+            try:
+                tracks = self.player.video_get_spu_description() or []
+                current_id = self.player.video_get_spu()
+                menu.add_command(label="✓ Disable subtitles" if current_id == -1 else "Disable subtitles",
+                                 command=lambda: self._select_subtitle_track(-1))
+                if tracks:
+                    menu.add_separator()
+                    for track_id, track_name in tracks:
+                        track_id = int(track_id)
+                        if track_id < 0:
+                            continue
+                        label = self._track_name(track_name)
+                        if track_id == int(current_id):
+                            label = "✓ " + label
+                        menu.add_command(
+                            label=label,
+                            command=lambda tid=track_id: self._select_subtitle_track(tid)
+                        )
+                else:
+                    menu.add_command(label="No embedded subtitle tracks reported", state="disabled")
+                menu.add_separator()
+                menu.add_command(label="Load external subtitle file…", command=self.open_subtitle)
+            except Exception as exc:
+                menu.add_command(label=f"Could not read subtitle tracks: {exc}", state="disabled")
+                menu.add_command(label="Load external subtitle file…", command=self.open_subtitle)
+        self._show_track_menu(self.subtitle_button, menu)
+
+    def _select_subtitle_track(self, track_id: int) -> None:
+        if not self.player:
+            return
+        try:
+            result = self.player.video_set_spu(track_id)
+            if result == -1:
+                messagebox.showwarning(
+                    "Subtitles", "VLC could not switch to that subtitle track.", parent=self.root
+                )
+            else:
+                self.status_label.config(
+                    text="SUBTITLES OFF" if track_id == -1 else "SUBTITLE TRACK CHANGED",
+                    fg="#c4b5fd"
+                )
+        except Exception as exc:
+            messagebox.showerror("Subtitle error", str(exc), parent=self.root)
 
     def _begin_seek(self, _event=None) -> None:
         self.dragging_seek = True
@@ -335,14 +472,26 @@ class MovieMindPlayer:
 
     def toggle_fullscreen(self) -> None:
         self.fullscreen = not self.fullscreen
-        self.root.attributes("-fullscreen", self.fullscreen)
         if self.fullscreen:
+            # Video-only fullscreen: hide the companion and all app controls.
+            self.header.pack_forget()
+            self.companion.pack_forget()
+            self.controls.pack_forget()
+            self.buttons.pack_forget()
+            self.root.attributes("-fullscreen", True)
+            self._attach_video_surface()
             self.video_frame.focus_set()
+        else:
+            self.root.attributes("-fullscreen", False)
+            self.header.pack(fill="x", padx=16, pady=(12, 8))
+            self.companion.pack(side="right", fill="y", padx=(12, 0))
+            self.controls.pack(fill="x", padx=16, pady=(0, 14))
+            self.buttons.pack(fill="x", padx=16, pady=(0, 16))
+            self._attach_video_surface()
 
     def _escape_fullscreen(self, _event=None) -> None:
         if self.fullscreen:
-            self.fullscreen = False
-            self.root.attributes("-fullscreen", False)
+            self.toggle_fullscreen()
 
     def _space_shortcut(self, event=None) -> str:
         # Avoid toggling playback when the user is typing into a future chat input.
