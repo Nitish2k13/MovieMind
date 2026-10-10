@@ -60,6 +60,8 @@ class MovieMindPlayer:
         self._overlay_osd = None
         self._fullscreen_poll_id = None
         self._fullscreen_osd_id = None
+        self._key_poll_id = None
+        self._keys_down: set[int] = set()
         self._after_id = None
 
         if vlc is not None:
@@ -89,8 +91,9 @@ class MovieMindPlayer:
         self.root.bind_all("<Down>", self._shortcut_down, add="+")
         self.root.bind_all("<Motion>", self._fullscreen_mouse_motion, add="+")
         self.root.bind_all("<Configure>", self._fullscreen_geometry_changed, add="+")
-        # VLC's native Windows video child does not forward mouse/key events to Tk.
-        # Poll the actual cursor position while fullscreen to reliably reveal controls.
+        # VLC's native Windows child window can take keyboard focus away from Tk.
+        # Poll key state while the player is open so media shortcuts still work.
+        self._start_key_poll()
         self.root.after(250, self._attach_video_surface)
         self._schedule_tick()
 
@@ -1002,6 +1005,58 @@ class MovieMindPlayer:
             except tk.TclError:
                 pass
 
+    def _start_key_poll(self) -> None:
+        self._key_poll_id = self.root.after(60, self._poll_media_keys)
+
+    def _poll_media_keys(self) -> None:
+        self._key_poll_id = None
+        try:
+            import ctypes
+            # VK codes: Space, arrows, Escape, F, O.
+            keys = {
+                0x20: "space", 0x25: "left", 0x26: "up", 0x27: "right",
+                0x28: "down", 0x1B: "escape", 0x46: "f", 0x4F: "o"
+            }
+            current_down = {
+                vk for vk in keys
+                if ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000
+            }
+            pressed = current_down - self._keys_down
+            self._keys_down = current_down
+            # Only act when MovieMind is the foreground app; don't hijack keys
+            # while the user is working in another application.
+            foreground = ctypes.windll.user32.GetForegroundWindow()
+            own_window = int(self.root.winfo_id())
+            # On Windows, compare foreground top-level to Tk's top-level HWND.
+            try:
+                own_window = int(self.root.winfo_toplevel().winfo_id())
+                own_window = int(ctypes.windll.user32.GetAncestor(own_window, 2)) or own_window
+            except Exception:
+                pass
+            if foreground == own_window:
+                text_focused = self._is_text_entry_focused()
+                if 0x1B in pressed and self.fullscreen:
+                    self.toggle_fullscreen()
+                elif 0x46 in pressed and not text_focused:
+                    self.toggle_fullscreen()
+                elif 0x20 in pressed and not text_focused:
+                    self.toggle_play()
+                elif not text_focused:
+                    if 0x25 in pressed:
+                        self.seek_by(-5)
+                    if 0x27 in pressed:
+                        self.seek_by(5)
+                    if 0x26 in pressed:
+                        self.change_volume(5)
+                    if 0x28 in pressed:
+                        self.change_volume(-5)
+                    if 0x4F in pressed and (ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000):
+                        self.open_file()
+        except Exception:
+            pass
+        if not getattr(self, "_closing", False):
+            self._key_poll_id = self.root.after(60, self._poll_media_keys)
+
     def _escape_fullscreen(self, _event=None) -> None:
         if self.fullscreen:
             self.toggle_fullscreen()
@@ -1048,6 +1103,12 @@ class MovieMindPlayer:
         return None
 
     def close(self) -> None:
+        self._closing = True
+        if self._key_poll_id is not None:
+            try:
+                self.root.after_cancel(self._key_poll_id)
+            except Exception:
+                pass
         if self._after_id is not None:
             try:
                 self.root.after_cancel(self._after_id)
