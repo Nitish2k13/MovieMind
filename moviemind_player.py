@@ -47,6 +47,7 @@ class MovieMindPlayer:
         self.current_path: str | None = None
         self.movie_title = ""
         self.subtitle_context: list[dict[str, object]] = []
+        self.ai_request_running = False
         self.duration_ms = 0
         self.dragging_seek = False
         self.fullscreen = False
@@ -134,12 +135,24 @@ class MovieMindPlayer:
         )
         self.context_label.pack(anchor="w", padx=14, pady=(0, 12))
         tk.Label(
-            companion,
-            text="Next: subtitle-based movie context. The assistant will answer "
-                 "from cached context in a later phase.",
+            companion, text="ASK ABOUT THIS MOVIE", bg=PANEL, fg=TEXT,
+            font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w", padx=14, pady=(4, 6))
+        self.question_var = tk.StringVar(value="")
+        self.question_entry = tk.Entry(
+            companion, textvariable=self.question_var, bg="#252a36", fg=TEXT,
+            insertbackground=TEXT, relief="flat", font=("Segoe UI", 10)
+        )
+        self.question_entry.pack(fill="x", padx=14, pady=(0, 6), ipady=6)
+        self._button(companion, "Ask MovieMind", self.ask_movie).pack(
+            anchor="w", padx=14, pady=(0, 8)
+        )
+        self.answer_label = tk.Label(
+            companion, text="Load an external subtitle file, then ask a question.",
             bg=PANEL, fg=MUTED, wraplength=250, justify="left",
-            font=("Segoe UI", 10)
-        ).pack(anchor="w", padx=14, pady=(0, 12))
+            font=("Segoe UI", 9), anchor="nw"
+        )
+        self.answer_label.pack(fill="both", expand=True, anchor="w", padx=14, pady=(0, 12))
 
         self.status_label = tk.Label(
             companion, text="PLAYER READY", bg="#242a38", fg="#c4b5fd",
@@ -178,7 +191,6 @@ class MovieMindPlayer:
 
         self._button(buttons, "Open Movie", self.open_file, primary=True).pack(side="left")
         self._button(buttons, "Play / Pause", self.toggle_play).pack(side="left", padx=(8, 0))
-        self._button(buttons, "Stop", self.stop).pack(side="left", padx=(8, 0))
         self.audio_button = self._button(buttons, "Audio Track ▾", self.show_audio_menu)
         self.audio_button.pack(side="left", padx=(8, 0))
         self.subtitle_button = self._button(buttons, "Subtitles ▾", self.show_subtitle_menu)
@@ -574,11 +586,127 @@ class MovieMindPlayer:
                 })
         return records
 
+    def ask_movie(self) -> None:
+        question = self.question_var.get().strip()
+        if not question:
+            self.answer_label.config(text="Type a question first.", fg=MUTED)
+            return
+        if not self.movie_title:
+            self.answer_label.config(text="Open a movie and check its title first.", fg=MUTED)
+            return
+        if not self.subtitle_context:
+            self.answer_label.config(
+                text="Load an external SRT/VTT subtitle file first. This version uses its "
+                     "timestamped dialogue as context.", fg=MUTED
+            )
+            return
+        if self.ai_request_running:
+            return
+
+        try:
+            current_ms = self.player.get_time() if self.player else 0
+            current_ms = current_ms if current_ms and current_ms > 0 else 0
+        except Exception:
+            current_ms = 0
+
+        # Prefer dialogue near the current scene, then add keyword-matching lines
+        # from the rest of the subtitle cache. Keep the prompt small and local.
+        nearby = [
+            item for item in self.subtitle_context
+            if int(item["start_ms"]) <= current_ms + 45_000
+            and int(item["end_ms"]) >= max(0, current_ms - 45_000)
+        ]
+        words = {
+            word.lower().strip(".,!?;:\"'()[]{}")
+            for word in question.split() if len(word.strip(".,!?;:\"'()[]{}")) > 3
+        }
+        matching = [
+            item for item in self.subtitle_context
+            if words and any(word in str(item["text"]).lower() for word in words)
+        ]
+        selected = []
+        seen = set()
+        for item in nearby[-14:] + matching[:10]:
+            key = (item["start_ms"], item["text"])
+            if key not in seen:
+                seen.add(key)
+                selected.append(item)
+        context = "\\n".join(
+            f"[{self._format_time(int(item['start_ms']))}] {item['text']}"
+            for item in selected[-22:]
+        )
+        if not context:
+            context = "No subtitle dialogue found near the current time or matching the question."
+
+        prompt = (
+            "You are MovieMind, a concise movie companion. Answer using only the supplied "
+            "subtitle evidence and the stated movie title. Do not invent visual details or "
+            "claim a character identity unless the dialogue supports it. If the evidence is "
+            "insufficient, say so briefly. Keep the answer to 2-4 sentences.\\n"
+            f"Movie title: {self.movie_title}\\n"
+            f"Playback time: {self._format_time(current_ms)}\\n"
+            f"Question: {question}\\n"
+            f"Timestamped subtitle context:\\n{context}"
+        )
+        self.ai_request_running = True
+        self.answer_label.config(text="Thinking locally…", fg="#c4b5fd")
+        self.status_label.config(text="ASKING LOCAL AI…", fg="#c4b5fd")
+        import threading
+        threading.Thread(target=self._run_local_ai, args=(prompt,), daemon=True).start()
+
+    def _run_local_ai(self, prompt: str) -> None:
+        import json
+        import urllib.error
+        import urllib.request
+
+        result = None
+        error = None
+        try:
+            payload = json.dumps({
+                "model": "gemma3:4b",
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.2, "num_predict": 160}
+            }).encode("utf-8")
+            request = urllib.request.Request(
+                "http://localhost:11434/api/generate",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(request, timeout=90) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            result = data.get("response", "").strip() or "The local model returned an empty answer."
+        except urllib.error.URLError as exc:
+            error = (
+                "Could not reach Ollama at localhost:11434. Start Ollama and confirm "
+                "gemma3:4b is installed. Details: " + str(exc)
+            )
+        except Exception as exc:
+            error = f"Local AI request failed: {exc}"
+
+        def finish() -> None:
+            self.ai_request_running = False
+            try:
+                if error:
+                    self.answer_label.config(text=error, fg="#fca5a5")
+                    self.status_label.config(text="LOCAL AI UNAVAILABLE", fg="#fca5a5")
+                else:
+                    self.answer_label.config(text=result, fg=TEXT)
+                    self.status_label.config(text="ANSWER READY", fg="#86efac")
+            except tk.TclError:
+                pass
+
+        try:
+            self.root.after(0, finish)
+        except tk.TclError:
+            pass
+
     def toggle_fullscreen(self) -> None:
+        # Schedule layout/handle work after Tk has applied the new window geometry.
+        # This avoids forcing an immediate native VLC surface rebind during the transition.
         self.fullscreen = not self.fullscreen
         if self.fullscreen:
-            # Keep the Tk video host mapped. Unmapping its parent makes libVLC's
-            # native child surface go black on some Windows/VLC combinations.
             self.header.pack_forget()
             self.companion.pack_forget()
             self.controls.pack_forget()
@@ -586,9 +714,6 @@ class MovieMindPlayer:
             self.body.pack_configure(fill="both", expand=True, padx=0, pady=0)
             self.video_frame.pack_configure(fill="both", expand=True)
             self.root.attributes("-fullscreen", True)
-            self.root.update_idletasks()
-            self._attach_video_surface()
-            self.video_frame.focus_set()
         else:
             self.root.attributes("-fullscreen", False)
             self.header.pack(fill="x", padx=16, pady=(12, 8))
@@ -596,8 +721,16 @@ class MovieMindPlayer:
             self.companion.pack(side="right", fill="y", padx=(12, 0))
             self.controls.pack(fill="x", padx=16, pady=(0, 14))
             self.buttons.pack(fill="x", padx=16, pady=(0, 16))
+        self.root.after_idle(self._finish_fullscreen_transition)
+
+    def _finish_fullscreen_transition(self) -> None:
+        try:
             self.root.update_idletasks()
             self._attach_video_surface()
+            if self.fullscreen:
+                self.video_frame.focus_set()
+        except tk.TclError:
+            pass
 
     def _escape_fullscreen(self, _event=None) -> None:
         if self.fullscreen:
