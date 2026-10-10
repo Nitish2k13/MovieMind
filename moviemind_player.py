@@ -45,6 +45,8 @@ class MovieMindPlayer:
         self.instance = None
         self.player = None
         self.current_path: str | None = None
+        self.movie_title = ""
+        self.subtitle_context: list[dict[str, object]] = []
         self.duration_ms = 0
         self.dragging_seek = False
         self.fullscreen = False
@@ -114,10 +116,27 @@ class MovieMindPlayer:
             font=("Segoe UI", 12, "bold")
         ).pack(anchor="w", padx=14, pady=(16, 6))
         tk.Label(
+            companion, text="MOVIE TITLE", bg=PANEL, fg=MUTED,
+            font=("Segoe UI", 9, "bold")
+        ).pack(anchor="w", padx=14, pady=(10, 4))
+        self.title_var = tk.StringVar(value="")
+        self.title_entry = tk.Entry(
+            companion, textvariable=self.title_var, bg="#252a36", fg=TEXT,
+            insertbackground=TEXT, relief="flat", font=("Segoe UI", 10)
+        )
+        self.title_entry.pack(fill="x", padx=14, pady=(0, 6), ipady=6)
+        self._button(companion, "Set / Correct Title", self.set_movie_title).pack(
+            anchor="w", padx=14, pady=(0, 10)
+        )
+        self.context_label = tk.Label(
+            companion, text="Subtitle context: not loaded", bg=PANEL, fg=MUTED,
+            wraplength=250, justify="left", font=("Segoe UI", 9)
+        )
+        self.context_label.pack(anchor="w", padx=14, pady=(0, 12))
+        tk.Label(
             companion,
-            text="Your movie companion will live here. Automatic movie detection, "
-                 "temporary context memory, and questions will be added after the "
-                 "player foundation is tested.",
+            text="Next: subtitle-based movie context. The assistant will answer "
+                 "from cached context in a later phase.",
             bg=PANEL, fg=MUTED, wraplength=250, justify="left",
             font=("Segoe UI", 10)
         ).pack(anchor="w", padx=14, pady=(0, 12))
@@ -231,8 +250,13 @@ class MovieMindPlayer:
             self.player.set_media(media)
             self.current_path = path
             self.duration_ms = 0
+            detected_title = self._title_from_filename(path)
+            self.movie_title = detected_title
+            self.title_var.set(detected_title)
+            self.subtitle_context.clear()
+            self.context_label.config(text="Subtitle context: not loaded")
             self.file_label.config(text=Path(path).name)
-            self.status_label.config(text="MOVIE LOADED", fg="#c4b5fd")
+            self.status_label.config(text="MOVIE LOADED · CHECK TITLE", fg="#c4b5fd")
             self._attach_video_surface()
             result = self.player.play()
             if result == -1:
@@ -285,6 +309,10 @@ class MovieMindPlayer:
                     parent=self.root,
                 )
             else:
+                self.subtitle_context = self._parse_subtitle_file(path)
+                self.context_label.config(
+                    text=f"Subtitle context: {len(self.subtitle_context)} timestamped lines cached"
+                )
                 self.status_label.config(text=f"SUBTITLES: {Path(path).name}", fg="#c4b5fd")
         except Exception as exc:
             messagebox.showerror("Subtitle error", str(exc), parent=self.root)
@@ -470,25 +498,105 @@ class MovieMindPlayer:
         minutes, seconds = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
 
+    @staticmethod
+    def _title_from_filename(path: str) -> str:
+        """Guess a human-readable title from a filename; user can correct it."""
+        import re
+
+        stem = Path(path).stem
+        stem = re.sub(r"[._]+", " ", stem)
+        # Remove common release tags, resolutions, codecs and source labels.
+        stem = re.sub(
+            r"(?i)\\b(2160p|1080p|720p|480p|4k|uhd|hdr10?|bluray|blu.?ray|web.?dl|"
+            r"webrip|hdtv|x264|x265|h264|h265|hevc|aac|proper|repack|yts|rarbg)\\b.*$",
+            "", stem
+        )
+        # If a year is present, retain the title and year but discard following tags.
+        match = re.search(r"^(.*?)(?:\\s*\\(?((?:19|20)\\d{2})\\)?)(?:\\s|$)", stem)
+        if match:
+            stem = f"{match.group(1).strip()} ({match.group(2)})"
+        return re.sub(r"\\s+", " ", stem).strip(" -_()") or Path(path).stem
+
+    def set_movie_title(self) -> None:
+        title = self.title_var.get().strip()
+        if not title:
+            messagebox.showinfo("Movie title", "Enter a movie title first.", parent=self.root)
+            return
+        self.movie_title = title
+        self.status_label.config(text="MOVIE TITLE SET", fg="#c4b5fd")
+
+    @staticmethod
+    def _parse_subtitle_file(path: str) -> list[dict[str, object]]:
+        """Parse SRT/VTT timestamps into lightweight in-memory context records."""
+        import re
+
+        timestamp_re = re.compile(
+            r"(?P<start>\\d{2}:\\d{2}:\\d{2}[,.]\\d{3})\\s*-->\\s*"
+            r"(?P<end>\\d{2}:\\d{2}:\\d{2}[,.]\\d{3})"
+        )
+
+        def to_ms(value: str) -> int:
+            hours, minutes, rest = value.replace(",", ".").split(":")
+            seconds, millis = rest.split(".")
+            return ((int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1000
+                    + int(millis.ljust(3, "0")[:3]))
+
+        try:
+            raw = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError as exc:
+            print(f"[MovieMind Player] Could not read subtitle context: {exc}")
+            return []
+
+        blocks = re.split(r"\\n\\s*\\n", raw.strip())
+        records: list[dict[str, object]] = []
+        for block in blocks:
+            lines = [line.strip() for line in block.splitlines() if line.strip()]
+            timestamp_index = next(
+                (i for i, line in enumerate(lines) if "-->" in line), None
+            )
+            if timestamp_index is None:
+                continue
+            match = timestamp_re.search(lines[timestamp_index])
+            if not match:
+                continue
+            text_lines = lines[timestamp_index + 1:]
+            text_lines = [
+                re.sub(r"<[^>]+>", "", re.sub(r"\\{[^}]*\\}", "", line)).strip()
+                for line in text_lines
+            ]
+            text_lines = [line for line in text_lines if line and not re.fullmatch(r"\\d+", line)]
+            text = " ".join(text_lines).strip()
+            if text:
+                records.append({
+                    "start_ms": to_ms(match.group("start")),
+                    "end_ms": to_ms(match.group("end")),
+                    "text": text,
+                })
+        return records
+
     def toggle_fullscreen(self) -> None:
         self.fullscreen = not self.fullscreen
         if self.fullscreen:
-            # Video-only fullscreen: hide the companion and all app controls.
+            # Keep the Tk video host mapped. Unmapping its parent makes libVLC's
+            # native child surface go black on some Windows/VLC combinations.
             self.header.pack_forget()
-            self.body.pack_forget()
             self.companion.pack_forget()
             self.controls.pack_forget()
             self.buttons.pack_forget()
+            self.body.pack_configure(fill="both", expand=True, padx=0, pady=0)
+            self.video_frame.pack_configure(fill="both", expand=True)
             self.root.attributes("-fullscreen", True)
+            self.root.update_idletasks()
             self._attach_video_surface()
             self.video_frame.focus_set()
         else:
             self.root.attributes("-fullscreen", False)
             self.header.pack(fill="x", padx=16, pady=(12, 8))
-            self.body.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+            self.body.pack_configure(fill="both", expand=True, padx=16, pady=(0, 10))
             self.companion.pack(side="right", fill="y", padx=(12, 0))
             self.controls.pack(fill="x", padx=16, pady=(0, 14))
             self.buttons.pack(fill="x", padx=16, pady=(0, 16))
+            self.root.update_idletasks()
             self._attach_video_surface()
 
     def _escape_fullscreen(self, _event=None) -> None:
