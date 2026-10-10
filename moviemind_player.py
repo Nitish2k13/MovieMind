@@ -507,15 +507,15 @@ class MovieMindPlayer:
         stem = re.sub(r"[._]+", " ", stem)
         # Remove common release tags, resolutions, codecs and source labels.
         stem = re.sub(
-            r"(?i)\\b(2160p|1080p|720p|480p|4k|uhd|hdr10?|bluray|blu.?ray|web.?dl|"
-            r"webrip|hdtv|x264|x265|h264|h265|hevc|aac|proper|repack|yts|rarbg)\\b.*$",
+            r"(?i)\b(2160p|1080p|720p|480p|4k|uhd|hdr10?|bluray|blu.?ray|web.?dl|"
+            r"webrip|hdtv|x264|x265|h264|h265|hevc|aac|proper|repack|yts|rarbg)\b.*$",
             "", stem
         )
         # If a year is present, retain the title and year but discard following tags.
-        match = re.search(r"^(.*?)(?:\\s*\\(?((?:19|20)\\d{2})\\)?)(?:\\s|$)", stem)
+        match = re.search(r"^(.*?)(?:\s*\(?((?:19|20)\d{2})\)?)(?:\s|$)", stem)
         if match:
             stem = f"{match.group(1).strip()} ({match.group(2)})"
-        return re.sub(r"\\s+", " ", stem).strip(" -_()") or Path(path).stem
+        return re.sub(r"\s+", " ", stem).strip(" -_()") or Path(path).stem
 
     def set_movie_title(self) -> None:
         title = self.title_var.get().strip()
@@ -531,8 +531,8 @@ class MovieMindPlayer:
         import re
 
         timestamp_re = re.compile(
-            r"(?P<start>\\d{2}:\\d{2}:\\d{2}[,.]\\d{3})\\s*-->\\s*"
-            r"(?P<end>\\d{2}:\\d{2}:\\d{2}[,.]\\d{3})"
+            r"(?P<start>\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*"
+            r"(?P<end>\d{2}:\d{2}:\d{2}[,.]\d{3})"
         )
 
         def to_ms(value: str) -> int:
@@ -547,7 +547,7 @@ class MovieMindPlayer:
             print(f"[MovieMind Player] Could not read subtitle context: {exc}")
             return []
 
-        blocks = re.split(r"\\n\\s*\\n", raw.strip())
+        blocks = re.split(r"\n\s*\n", raw.strip())
         records: list[dict[str, object]] = []
         for block in blocks:
             lines = [line.strip() for line in block.splitlines() if line.strip()]
@@ -561,10 +561,10 @@ class MovieMindPlayer:
                 continue
             text_lines = lines[timestamp_index + 1:]
             text_lines = [
-                re.sub(r"<[^>]+>", "", re.sub(r"\\{[^}]*\\}", "", line)).strip()
+                re.sub(r"<[^>]+>", "", re.sub(r"\{[^}]*\}", "", line)).strip()
                 for line in text_lines
             ]
-            text_lines = [line for line in text_lines if line and not re.fullmatch(r"\\d+", line)]
+            text_lines = [line for line in text_lines if line and not re.fullmatch(r"\d+", line)]
             text = " ".join(text_lines).strip()
             if text:
                 records.append({
