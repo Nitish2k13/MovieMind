@@ -504,9 +504,11 @@ class MovieMindPlayer:
             if duration_ms and duration_ms > 0:
                 self.duration_ms = duration_ms
             if current_ms is not None and current_ms >= 0:
-                if not self.dragging_seek and self.duration_ms > 0:
+                position = None
+                if self.duration_ms > 0:
                     position = max(0.0, min(1000.0, current_ms / self.duration_ms * 1000))
-                    self.seek_scale.set(position)
+                    if not self.dragging_seek:
+                        self.seek_scale.set(position)
                 time_text = f"{self._format_time(current_ms)} / {self._format_time(self.duration_ms)}"
                 self.time_label.config(text=time_text)
                 if self._overlay_time is not None:
@@ -514,7 +516,7 @@ class MovieMindPlayer:
                         self._overlay_time.config(text=time_text)
                     except tk.TclError:
                         pass
-                if self._overlay_seek is not None and not self.dragging_seek:
+                if self._overlay_seek is not None and not self.dragging_seek and position is not None:
                     try:
                         self._overlay_seek.set(position)
                     except tk.TclError:
