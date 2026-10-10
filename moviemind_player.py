@@ -475,6 +475,7 @@ class MovieMindPlayer:
         if self.fullscreen:
             # Video-only fullscreen: hide the companion and all app controls.
             self.header.pack_forget()
+            self.body.pack_forget()
             self.companion.pack_forget()
             self.controls.pack_forget()
             self.buttons.pack_forget()
@@ -484,6 +485,7 @@ class MovieMindPlayer:
         else:
             self.root.attributes("-fullscreen", False)
             self.header.pack(fill="x", padx=16, pady=(12, 8))
+            self.body.pack(fill="both", expand=True, padx=16, pady=(0, 10))
             self.companion.pack(side="right", fill="y", padx=(12, 0))
             self.controls.pack(fill="x", padx=16, pady=(0, 14))
             self.buttons.pack(fill="x", padx=16, pady=(0, 16))
