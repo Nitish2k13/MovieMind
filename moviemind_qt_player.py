@@ -8,14 +8,22 @@ from __future__ import annotations
 
 import re
 import sys
+import os
+import json
+import base64
+import tempfile
+import threading
+import urllib.error
+import urllib.request
+import uuid
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QObject, QEvent
+from PySide6.QtCore import Qt, QTimer, QObject, QEvent, Signal
 from PySide6.QtGui import QAction, QKeySequence, QCursor
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QMenu, QMessageBox, QPushButton, QSizePolicy, QSlider, QVBoxLayout,
-    QWidget, QFrame,
+    QWidget, QFrame, QComboBox, QLineEdit, QTextEdit, QScrollArea,
 )
 
 try:
@@ -58,6 +66,10 @@ QMenu::item:selected { background: #176fd0; }
 """
 
 
+class AIResultBridge(QObject):
+    finished = Signal(str, str, object)
+
+
 def clock(ms: int) -> str:
     seconds = max(0, ms // 1000)
     hours, rem = divmod(seconds, 3600)
@@ -73,6 +85,14 @@ class MovieMindQtPlayer(QMainWindow):
         self.setMinimumSize(980, 640)
         self.setStyleSheet(STYLESHEET)
         self.current_path: str | None = None
+        self.movie_title = ""
+        self.subtitle_context: list[dict[str, object]] = []
+        self.recent_qa_memory: list[dict[str, str]] = []
+        self.reply_language = "English"
+        self.ai_request_running = False
+        self._pending_snapshot_paths: set[str] = set()
+        self.ai_bridge = AIResultBridge(self)
+        self.ai_bridge.finished.connect(self._finish_ai_request)
         self.duration_ms = 0
         self.dragging_seek = False
         self._pending_seek_ms: int | None = None
