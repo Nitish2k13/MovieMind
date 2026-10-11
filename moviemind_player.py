@@ -1252,6 +1252,19 @@ Return only the answer, with no meta commentary.
         result = None
         error = None
         try:
+            # Easter egg research requires internet; normal AI modes remain local/offline.
+            connectivity_check = urllib.request.Request(
+                "https://www.google.com/generate_204",
+                headers={"User-Agent": "MovieMind/1.0"},
+            )
+            try:
+                with urllib.request.urlopen(connectivity_check, timeout=4):
+                    pass
+            except Exception:
+                raise RuntimeError(
+                    "You appear to be offline. Easter egg research needs an internet connection; "
+                    "connect to the internet and select this mode again."
+                )
             for _ in range(20):
                 if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
                     break
