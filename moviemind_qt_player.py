@@ -707,8 +707,10 @@ class MovieMindQtPlayer(QMainWindow):
                 "domestic collection, worldwide collection, or profit. If a figure is uncertain, write "
                 "'Not reliably available from offline knowledge'. "
                 "Use the supplied local file runtime as authoritative for this file, not necessarily the official cut. "
+                "The Runtime heading MUST contain exactly the supplied VLC runtime below and MUST NOT include any alternate, official, theatrical, extended, or guessed runtime. "
+                "Do not calculate or append a second runtime in parentheses. "
                 "Do not browse, call an API, or claim facts were verified online. Keep it concise and spoiler-light.\n"
-                f"Runtime reported by VLC for this local video file: {actual_runtime}."
+                f"AUTHORITATIVE RUNTIME — copy this value exactly into the Runtime heading: {actual_runtime}."
             )
             question_for_memory = "Movie overview"
         elif mode == "Explain scene":
@@ -804,6 +806,7 @@ Return only the answer, with no meta commentary.
         request_context = {
             "mode": mode, "question": question_for_memory,
             "language": language, "time": clock(current_ms),
+            "authoritative_runtime": actual_runtime if mode == "Movie overview" else "",
             "visual_frames": self._recent_visual_images(2) if mode in ("Explain scene", "Explain dialogue") else [],
         }
         self.ai_request_running = True
@@ -868,6 +871,15 @@ Return only the answer, with no meta commentary.
             self.answer_area.setMaximumHeight(260)
             self._set_status("LOCAL AI UNAVAILABLE")
             return
+        if context.get("mode") == "Movie overview":
+            authoritative_runtime = str(context.get("authoritative_runtime", "")).strip()
+            if authoritative_runtime and authoritative_runtime != "Unavailable from the media player":
+                runtime_line = f"**Runtime:** {authoritative_runtime}"
+                runtime_pattern = re.compile(r"(?im)^\\s*(?:\\*\\*)?runtime(?:\\*\\*)?\\s*:\\s*.*$")
+                if runtime_pattern.search(result):
+                    result = runtime_pattern.sub(runtime_line, result, count=1)
+                else:
+                    result = runtime_line + "\\n" + result
         self.answer_area.setPlainText(result)
         self.answer_area.setMinimumHeight(190)
         self.answer_area.setMaximumHeight(320)
