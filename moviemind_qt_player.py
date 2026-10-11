@@ -281,7 +281,16 @@ class MovieMindQtPlayer(QMainWindow):
         )
         self.fullscreen_overlay.setMouseTracking(True)
         self.fullscreen_overlay.installEventFilter(self)
-        self.fullscreen_title = QLabel("", self.fullscreen_overlay)
+        self.fullscreen_title = QLabel(
+            "", self, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus
+        )
+        self.fullscreen_title.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.fullscreen_title.setStyleSheet(
+            "QLabel { background:rgba(7,17,31,220); color:#eaf3ff; "
+            "border:1px solid #28496e; border-radius:8px; "
+            "padding:7px 12px; font-size:13px; font-weight:700; }"
+        )
+        self.fullscreen_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.fullscreen_title.hide()
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidepanel")
@@ -315,7 +324,11 @@ class MovieMindQtPlayer(QMainWindow):
         title = QLabel("Your movie companion")
         title.setStyleSheet("font-size:20px; font-weight:750;")
         side.addWidget(title)
-        desc = QLabel("Understand scenes, decode dialogue, and discover details without losing the moment.")
+        desc = QLabel(
+            "Understand scenes, decode dialogue, and discover details without losing the moment. "
+            "MovieMind can make mistakes; watching from the beginning can provide better context "
+            "for more accurate responses."
+        )
         desc.setObjectName("muted")
         desc.setWordWrap(True)
         side.addWidget(desc)
@@ -605,6 +618,18 @@ class MovieMindQtPlayer(QMainWindow):
             for item in selected[-18:]
         ) or "No timestamped subtitle context is available."
         current_subtitle = self._current_subtitle(current_ms) or "No subtitle line is active at this exact playback time."
+        if mode == "Explain dialogue":
+            active_subtitles = [
+                item for item in self.subtitle_context
+                if int(item["start_ms"]) <= current_ms <= int(item["end_ms"])
+                and str(item.get("text", "")).strip()
+            ]
+            if not active_subtitles:
+                self.answer_area.setPlainText("Pick a scene with subtitle to explain the dialogue.")
+                self.answer_area.setMinimumHeight(110)
+                self.answer_area.setMaximumHeight(180)
+                self._set_status("SUBTITLE REQUIRED")
+                return
         memory = "\n".join(
             f"[{item['time']}] User asked ({item['mode']}): {item['question']}\n"
             f"MovieMind answered: {item['answer'][:700]}"
@@ -1016,6 +1041,7 @@ Return only the answer, with no meta commentary.
             normal_geometry = self._normal_geometry_before_fullscreen
             self._fullscreen_controls_timer.stop()
             self.fullscreen_overlay.hide()
+            self.fullscreen_title.hide()
             self.deck.hide()
             self.deck.setParent(self.centralWidget())
             self.left_layout.addWidget(self.deck)
@@ -1049,9 +1075,9 @@ Return only the answer, with no meta commentary.
             self.deck.setParent(self.fullscreen_overlay)
             self.deck.setMinimumHeight(100)
             self.deck.setMaximumHeight(142)
-            self.fullscreen_title.hide()
             self.showFullScreen()
             self._position_fullscreen_overlay()
+            self._position_fullscreen_title()
             # Keep the panel and its child deck hidden until the cursor enters
             # the bottom zone. Showing a child of a hidden tool window is flaky
             # on Windows and can leave it detached from the visible panel.
@@ -1066,6 +1092,23 @@ Return only the answer, with no meta commentary.
         self.left_layout.activate()
         self.updateGeometry()
         self.update()
+
+    def _position_fullscreen_title(self) -> None:
+        if not self.isFullScreen() or not self.movie_title:
+            self.fullscreen_title.hide()
+            return
+        width = min(440, max(220, self.width() // 3))
+        height = 42
+        top_left = self.mapToGlobal(self.rect().topLeft())
+        self.fullscreen_title.setText(self.movie_title)
+        self.fullscreen_title.setGeometry(
+            top_left.x() + self.width() - width - 24,
+            top_left.y() + 18,
+            width,
+            height,
+        )
+        self.fullscreen_title.show()
+        self.fullscreen_title.raise_()
 
     def _position_fullscreen_overlay(self) -> None:
         if not self.isFullScreen():
@@ -1086,10 +1129,12 @@ Return only the answer, with no meta commentary.
         super().resizeEvent(event)
         if self.isFullScreen():
             self._position_fullscreen_overlay()
+            self._position_fullscreen_title()
 
     def _poll_fullscreen_cursor(self) -> None:
         current = QCursor.pos()
         if not self.isFullScreen():
+            self.fullscreen_title.hide()
             self._last_cursor_pos = current
             return
         local = self.mapFromGlobal(current)
