@@ -587,7 +587,7 @@ class MovieMindQtPlayer(QMainWindow):
                 body,
             )
             body = re.sub(
-                r"(https?://[^\s\]\)>,]+)",
+                r'(?<!href=")(https?://[^\s\]\)>,]+)',
                 lambda match: '<a href="' + html.escape(html.unescape(match.group(0)).rstrip('.'), quote=True) + '">' +
                     html.escape(match.group(0).rstrip('.')) + '</a>' +
                     html.escape(match.group(0)[len(match.group(0).rstrip('.')):]),
