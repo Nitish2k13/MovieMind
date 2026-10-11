@@ -728,22 +728,34 @@ class MovieMindPlayer:
 
     @staticmethod
     def _title_from_filename(path: str) -> str:
-        """Guess a human-readable title from a filename; user can correct it."""
+        """Extract a likely movie title from a video filename, removing release clutter."""
         import re
 
-        stem = Path(path).stem
-        stem = re.sub(r"[._]+", " ", stem)
-        # Remove common release tags, resolutions, codecs and source labels.
+        original = Path(path).stem
+        stem = original.replace(".", " ").replace("_", " ")
+        # Drop common bracketed release/source tags, but preserve a year such as (2023).
+        stem = re.sub(
+            r"(?i)[\[\{(](?!(?:19|20)\d{2}\s*[\]\})])"
+            r"(?:1080p|720p|2160p|4k|uhd|hdr10?|web.?dl|webrip|bluray|blu.?ray|"
+            r"x26[45]|h26[45]|hevc|xvid|proper|repack|yts|rarbg|eztv|galaxyrg|"
+            r"amzn|nf|dsnp|hmax|atvp|ddp?\s*\d(?:\.\d)?|aac|dts|10bit|8bit)[^\]\})]*[\]\})]",
+            " ", stem,
+        )
+        # Once a recognizable release marker appears, everything after it is metadata.
         stem = re.sub(
             r"(?i)\b(2160p|1080p|720p|480p|4k|uhd|hdr10?|bluray|blu.?ray|web.?dl|"
-            r"webrip|hdtv|x264|x265|h264|h265|hevc|aac|proper|repack|yts|rarbg)\b.*$",
-            "", stem
+            r"webrip|hdtv|x264|x265|h264|h265|hevc|xvid|proper|repack|yts|rarbg|"
+            r"eztv|galaxyrg|amzn|dsnp|atvp|hmax|nf|10bit|8bit)\b.*$",
+            "", stem,
         )
-        # If a year is present, retain the title and year but discard following tags.
+        # Keep the first plausible release year; it helps distinguish remakes.
         match = re.search(r"^(.*?)(?:\s*\(?((?:19|20)\d{2})\)?)(?:\s|$)", stem)
         if match:
-            stem = f"{match.group(1).strip()} ({match.group(2)})"
-        return re.sub(r"\s+", " ", stem).strip(" -_()") or Path(path).stem
+            title = f"{match.group(1).strip()} ({match.group(2)})"
+        else:
+            title = stem
+        title = re.sub(r"\s+", " ", title).strip(" -_.()[]{}")
+        return title or original
 
     def set_movie_title(self) -> None:
         title = self.title_var.get().strip()
@@ -1001,12 +1013,17 @@ SOURCE ANSWER:
                 else "Unavailable from the media player"
             )
             task = (
-                "Give a useful movie overview with these headings: Runtime, Director, Main Cast, "
-                "Overview, Genre. Use the supplied local file runtime as authoritative. For "
-                "director, cast, genre, and plot, use only reliable knowledge already available "
-                "in your local model; do not browse, call an API, or claim that you verified facts "
-                "online. If you are unsure about a detail, write 'Not confidently known offline' "
-                "instead of guessing. Keep the overview spoiler-light and concise.\n"
+                "Create a helpful best-effort overview of the movie named above using your pretrained "
+                "knowledge, with these headings: Runtime, Director, Main Cast, Overview, Genre. "
+                "Use the supplied local file runtime as authoritative for the local file. The movie "
+                "title was extracted from the video filename and may have had release tags removed; "
+                "use the title and year together, if present, to identify the most likely movie. "
+                "For a recognizable movie, provide the basic facts you know instead of refusing the "
+                "whole overview just because one detail is uncertain. Do not browse, call an API, "
+                "or claim that facts were verified online. If multiple movies could match, say which "
+                "match seems most likely and briefly note the uncertainty. Mark only individual "
+                "unknown details as 'Not sure from offline knowledge'; never invent precise credits "
+                "or plot points. Keep the overview concise and spoiler-light.\n"
                 f"Runtime reported by VLC for this local video file: {actual_runtime}. "
                 "This is the file's playback duration, not necessarily the official theatrical cut runtime."
             )
