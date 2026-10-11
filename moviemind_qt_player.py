@@ -533,6 +533,8 @@ class MovieMindQtPlayer(QMainWindow):
             self.deck.hide()
             self.deck.setParent(self.centralWidget())
             self.left_layout.addWidget(self.deck)
+            self.deck.setMinimumHeight(100)
+            self.deck.setMaximumHeight(16777215)
             self.outer_layout.setContentsMargins(24, 18, 24, 22)
             self.header.show()
             self.sidebar.show()
@@ -542,6 +544,8 @@ class MovieMindQtPlayer(QMainWindow):
             elif normal_geometry is not None:
                 self.setGeometry(normal_geometry)
             self.deck.show()
+            self.deck.raise_()
+            self.fullscreen_overlay.hide()
             self._was_maximized_before_fullscreen = False
             self._normal_geometry_before_fullscreen = None
             self.setFocus()
@@ -550,12 +554,15 @@ class MovieMindQtPlayer(QMainWindow):
             self._was_maximized_before_fullscreen = self.isMaximized()
             self._normal_geometry_before_fullscreen = self.normalGeometry()
             self._fullscreen_controls_timer.stop()
+            self.fullscreen_overlay.hide()
             self.outer_layout.setContentsMargins(0, 0, 0, 0)
             self.header.hide()
             self.sidebar.hide()
             self.left_layout.removeWidget(self.deck)
             self.deck.hide()
             self.deck.setParent(self.fullscreen_overlay)
+            self.deck.setMinimumHeight(100)
+            self.deck.setMaximumHeight(142)
             self.fullscreen_title.hide()
             self.showFullScreen()
             self._position_fullscreen_overlay()
@@ -584,6 +591,8 @@ class MovieMindQtPlayer(QMainWindow):
             self.width(), strip_height
         )
         self.deck.setGeometry(0, 0, self.width(), strip_height)
+        self.deck.setMinimumHeight(100)
+        self.deck.setMaximumHeight(strip_height)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -591,21 +600,22 @@ class MovieMindQtPlayer(QMainWindow):
             self._position_fullscreen_overlay()
 
     def _poll_fullscreen_cursor(self) -> None:
-        if not self.isFullScreen():
-            self._last_cursor_pos = QCursor.pos()
-            return
         current = QCursor.pos()
-        if current != self._last_cursor_pos:
+        if not self.isFullScreen():
             self._last_cursor_pos = current
-            local = self.mapFromGlobal(current)
-            # Reveal controls only when the pointer reaches the bottom control zone,
-            # or while already interacting with the overlay deck.
-            in_bottom_zone = local.y() >= self.height() - 170
-            over_deck = self.deck.isVisible() and self.deck.geometry().contains(
-                self.fullscreen_overlay.mapFromGlobal(current)
-            )
-            if in_bottom_zone or over_deck:
-                self._show_fullscreen_controls()
+            return
+        local = self.mapFromGlobal(current)
+        in_bottom_zone = local.y() >= self.height() - 170
+        overlay_local = self.fullscreen_overlay.mapFromGlobal(current)
+        over_deck = self.deck.isVisible() and self.deck.geometry().contains(overlay_local)
+        moved = current != self._last_cursor_pos
+        self._last_cursor_pos = current
+        # Check the zone every tick, not only when the cursor coordinates change.
+        # This covers entering fullscreen with the pointer already at the bottom.
+        if in_bottom_zone and (moved or not self.fullscreen_overlay.isVisible()):
+            self._show_fullscreen_controls()
+        elif over_deck and moved:
+            self._fullscreen_controls_timer.start(5000)
 
     def _show_fullscreen_controls(self) -> None:
         if not self.isFullScreen() or not self.isActiveWindow():
