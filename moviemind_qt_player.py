@@ -149,7 +149,14 @@ class MovieMindQtPlayer(QMainWindow):
         if vlc is not None:
             try:
                 # Do not force an audio backend; let VLC select the system output.
-                self.instance = vlc.Instance("--no-video-title-show", "--avcodec-hw=none")
+                # Keep VLC's automatic snapshot preview/filename OSD off-screen.
+                # Subtitle tracks remain enabled; this only suppresses VLC's own OSD overlays.
+                self.instance = vlc.Instance(
+                    "--no-video-title-show",
+                    "--no-snapshot-preview",
+                    "--no-osd",
+                    "--avcodec-hw=none",
+                )
                 self.player = self.instance.media_player_new()
                 if sys.platform.startswith("win"):
                     self.player.set_hwnd(int(self.video_surface.winId()))
