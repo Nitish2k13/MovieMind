@@ -82,7 +82,7 @@ class MovieMindQtPlayer(QMainWindow):
         self._normal_geometry_before_fullscreen = None
         self._fullscreen_controls_timer = QTimer(self)
         self._fullscreen_controls_timer.setSingleShot(True)
-        self._fullscreen_controls_timer.setInterval(2200)
+        self._fullscreen_controls_timer.setInterval(5000)
         self._fullscreen_controls_timer.timeout.connect(self._hide_fullscreen_controls)
         self._last_cursor_pos = QCursor.pos()
         self._cursor_poll = QTimer(self)
@@ -247,7 +247,7 @@ class MovieMindQtPlayer(QMainWindow):
         # Use a native overlay only for the bottom control strip. A full-window
         # transparent overlay can cover VLC's native video surface on Windows.
         self.fullscreen_overlay = QWidget(
-            self, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+            self, Qt.Tool | Qt.FramelessWindowHint
         )
         self.fullscreen_overlay.setAttribute(Qt.WA_NativeWindow, True)
         self.fullscreen_overlay.setAttribute(Qt.WA_StyledBackground, True)
@@ -463,7 +463,7 @@ class MovieMindQtPlayer(QMainWindow):
         if not self.player or not self.current_path:
             QMessageBox.information(self, "Tracks", "Open a movie first.")
             return
-        menu = QMenu(self.fullscreen_overlay if self.isFullScreen() else button)
+        menu = QMenu(button)
         try:
             if kind == "audio":
                 tracks = self.player.audio_get_track_description() or []
@@ -487,11 +487,10 @@ class MovieMindQtPlayer(QMainWindow):
         # to display the track list.
         self._track_menu_open = True
         self._fullscreen_controls_timer.stop()
-        menu.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
         self._track_menu_open = False
         if self.isFullScreen():
-            self._fullscreen_controls_timer.start(2200)
+            self._fullscreen_controls_timer.start(5000)
 
     def _apply_track(self, setter, track_id: int) -> None:
         try:
@@ -607,45 +606,38 @@ class MovieMindQtPlayer(QMainWindow):
                 self._show_fullscreen_controls()
 
     def _show_fullscreen_controls(self) -> None:
-        if not self.isFullScreen():
+        if not self.isFullScreen() or not self.isActiveWindow():
             return
-        # Do not repeatedly raise the top-level overlay while the pointer moves:
-        # doing so can steal clicks from buttons and their popup menus on Windows.
-        if not self.fullscreen_overlay.isVisible():
+        was_hidden = not self.fullscreen_overlay.isVisible()
+        if was_hidden:
             self._position_fullscreen_overlay()
             self.fullscreen_overlay.show()
-        # Raise the actual top-level window and then the opaque control panel.
-        # Do this on reveal only, not on every mouse-move event.
-        self.fullscreen_overlay.raise_()
-        if not self.deck.isVisible():
+            self.fullscreen_overlay.raise_()
             self.deck.show()
-        self.deck.raise_()
-        cursor = self.fullscreen_overlay.mapFromGlobal(QCursor.pos())
-        if self.deck.geometry().contains(cursor):
-            self._fullscreen_controls_timer.stop()
-        else:
-            self._fullscreen_controls_timer.start()
+            self.deck.raise_()
+            # Start the five-second timeout only once when controls first appear.
+            # Repeated mouse-move events must not keep resetting the timeout.
+            self._fullscreen_controls_timer.start(5000)
 
     def _hide_fullscreen_controls(self) -> None:
         if self.isFullScreen() and not self._track_menu_open:
-            cursor = self.fullscreen_overlay.mapFromGlobal(QCursor.pos())
-            if self.deck.geometry().contains(cursor):
-                # Keep controls alive while the pointer is over them, so a click
-                # on Play/Pause cannot be lost to the auto-hide timer.
-                self._fullscreen_controls_timer.start(900)
-                return
             self.deck.hide()
             self.fullscreen_overlay.hide()
 
     def eventFilter(self, watched, event):
-        if self.isFullScreen() and event.type() in (QEvent.Type.MouseMove, QEvent.Type.Enter):
+        if event.type() == QEvent.Type.WindowDeactivate and watched is self:
+            self._fullscreen_controls_timer.stop()
+            self.deck.hide()
+            self.fullscreen_overlay.hide()
+        elif event.type() == QEvent.Type.WindowActivate and watched is self:
+            if self.isFullScreen():
+                self._last_cursor_pos = QCursor.pos()
+        if self.isFullScreen() and self.isActiveWindow() and event.type() in (QEvent.Type.MouseMove, QEvent.Type.Enter):
             if event.type() == QEvent.Type.Enter:
                 self._show_fullscreen_controls()
             else:
-                local_pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-                # Events from the fullscreen overlay use overlay-local coordinates;
-                # events from the main window use main-window coordinates.
                 if watched is self.fullscreen_overlay:
+                    local_pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                     y = local_pos.y()
                 else:
                     y = self.mapFromGlobal(QCursor.pos()).y()
