@@ -893,8 +893,8 @@ Return only the answer, with no meta commentary.
                 else:
                     result = runtime_line + "\n" + result
         # Render model output as clean plain text; do not show Markdown decoration such as **bold**.
-        result = re.sub(r"(?<!\\*)\\*\\*(.*?)\\*\\*(?!\\*)", r"\\1", result)
-        result = re.sub(r"(?m)^\\s*#{1,6}\\s+", "", result)
+        result = re.sub(r"(?<!\*)\*\*(.*?)\*\*(?!\*)", r"\1", result)
+        result = re.sub(r"(?m)^\s*#{1,6}\s+", "", result)
         self.answer_area.setPlainText(result)
         self.answer_area.setMinimumHeight(190)
         self.answer_area.setMaximumHeight(320)
