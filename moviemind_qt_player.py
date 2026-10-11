@@ -2,7 +2,7 @@
 
 The legacy Tkinter implementation remains unchanged as the reference while
 features are migrated incrementally. The Easter-egg web research pipeline is
-still pending migration; normal AI modes use local Ollama only.
+features are migrated incrementally. The legacy Tkinter implementation is left unchanged.
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from PySide6.QtGui import QAction, QKeySequence, QCursor
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QMenu, QMessageBox, QPushButton, QSizePolicy, QSlider, QVBoxLayout,
-    QWidget, QFrame, QComboBox, QLineEdit, QTextEdit, QScrollArea,
+    QWidget, QFrame, QComboBox, QLineEdit, QTextEdit, QTextBrowser, QScrollArea,
 )
 
 try:
@@ -399,8 +399,9 @@ class MovieMindQtPlayer(QMainWindow):
         answer_heading = QLabel("MOVIEMIND RESPONSE")
         answer_heading.setObjectName("eyebrow")
         side.addWidget(answer_heading)
-        self.answer_area = QTextEdit()
+        self.answer_area = QTextBrowser()
         self.answer_area.setReadOnly(True)
+        self.answer_area.setOpenExternalLinks(True)
         self.answer_area.setPlaceholderText("Choose an action above to get started.")
         self.answer_area.setMinimumHeight(70)
         self.answer_area.setMaximumHeight(110)
@@ -536,17 +537,17 @@ class MovieMindQtPlayer(QMainWindow):
             heading = f"Discovery {len(self.easter_egg_history) - index + 1} · {item['movie']} · {item['time']}"
             body = html.escape(item["result"])
             body = re.sub(
-                r"(https?://[^\\s\\]\\)>,]+)",
+                r"(https?://[^\s\]\)>,]+)",
                 lambda match: '<a href="' + html.escape(match.group(0).rstrip('.'), quote=True) + '">' +
                     html.escape(match.group(0).rstrip('.')) + '</a>' +
                     html.escape(match.group(0)[len(match.group(0).rstrip('.')):]),
                 body,
             )
-            body = re.sub(r"(?im)^Status:\\s*(CONFIRMED)\\b", r'<span style="color:#4ade80"><b>Status: \\1</b></span>', body)
-            body = re.sub(r"(?im)^Status:\\s*(POSSIBLE)\\b", r'<span style="color:#facc15"><b>Status: \\1</b></span>', body)
-            body = re.sub(r"(?im)^Status:\\s*(NOT VERIFIED|UNVERIFIED)\\b", r'<span style="color:#f87171"><b>Status: \\1</b></span>', body)
+            body = re.sub(r"(?im)^Status:\s*(CONFIRMED)\b", r'<span style="color:#4ade80"><b>Status: \1</b></span>', body)
+            body = re.sub(r"(?im)^Status:\s*(POSSIBLE)\b", r'<span style="color:#facc15"><b>Status: \1</b></span>', body)
+            body = re.sub(r"(?im)^Status:\s*(NOT VERIFIED|UNVERIFIED)\b", r'<span style="color:#f87171"><b>Status: \1</b></span>', body)
             blocks.append(f'<p style="color:#c4b5fd"><b>{html.escape(heading)}</b></p><pre style="white-space:pre-wrap;font-family:inherit">{body}</pre>')
-        self.answer_area.setHtml("\\n".join(blocks))
+        self.answer_area.setHtml("\n".join(blocks))
         self.answer_area.setReadOnly(True)
 
     def _mode_changed(self, mode: str) -> None:
@@ -610,7 +611,7 @@ class MovieMindQtPlayer(QMainWindow):
             return
         self._language_refresh_pending = True
         self.answer_area.setPlainText(
-            f"Switching response language to {language}…\\n"
+            f"Switching response language to {language}…\n"
             "MovieMind will refresh the current answer locally. The fan may briefly speed up while the AI works; this is normal. "
             "If you switch languages several times, only the last selection will be processed."
         )
