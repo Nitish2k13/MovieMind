@@ -657,14 +657,27 @@ class MovieMindQtPlayer(QMainWindow):
             f"[{clock(int(item['start_ms']))}] {item['text']}"
             for item in selected[-18:]
         ) or "No timestamped subtitle context is available."
-        current_subtitle = self._current_subtitle(current_ms) or "No subtitle line is active at this exact playback time."
+        current_subtitle = self._current_subtitle(current_ms)
+        with self._visual_memory_lock:
+            recent_visual_records = list(self.visual_memory)[-3:]
+        visual_subtitle = ""
+        for visual_record in reversed(recent_visual_records):
+            record_position = int(visual_record.get("position_ms", -1))
+            candidate = str(visual_record.get("subtitle", "")).strip()
+            if candidate and record_position >= 0 and abs(record_position - current_ms) <= 4000:
+                visual_subtitle = candidate
+                break
+        if not current_subtitle and visual_subtitle:
+            current_subtitle = visual_subtitle
+        if not current_subtitle:
+            current_subtitle = "No subtitle line is active at this exact playback time."
         if mode == "Explain dialogue":
             active_subtitles = [
                 item for item in self.subtitle_context
                 if int(item["start_ms"]) <= current_ms <= int(item["end_ms"])
                 and str(item.get("text", "")).strip()
             ]
-            if not active_subtitles:
+            if not active_subtitles and not visual_subtitle:
                 self.answer_area.setPlainText("Pick a scene with subtitle to explain the dialogue.")
                 self.answer_area.setMinimumHeight(110)
                 self.answer_area.setMaximumHeight(180)
