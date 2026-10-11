@@ -457,6 +457,14 @@ class MovieMindQtPlayer(QMainWindow):
 
     def _select_mode(self, mode: str) -> None:
         self.current_mode = mode
+        if mode == "Easter eggs / Hidden details":
+            self.answer_area.setMinimumHeight(300)
+            self.answer_area.setMaximumHeight(520)
+            self.answer_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        else:
+            self.answer_area.setMinimumHeight(70)
+            self.answer_area.setMaximumHeight(110)
+            self.answer_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         for selected, button in self.mode_buttons.items():
             button.setProperty("selected", selected == mode)
             button.style().unpolish(button)
@@ -525,8 +533,11 @@ class MovieMindQtPlayer(QMainWindow):
         self._set_status("ONLINE EASTER EGG RESEARCH COMPLETE")
 
     def _render_easter_egg_history(self) -> None:
-        """Display findings and source links in the Qt response panel."""
+        """Display findings and source links in the expanded Qt response panel."""
         import html
+        self.answer_area.setMinimumHeight(300)
+        self.answer_area.setMaximumHeight(520)
+        self.answer_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.answer_area.setReadOnly(False)
         self.answer_area.clear()
         blocks = []
@@ -1013,6 +1024,24 @@ Return only the answer, with no meta commentary.
                 search_clue = re.sub(r"\s+", " ", search_clue).strip(" .,:;-")
                 if not search_clue:
                     search_clue = clue
+                # Build a clean Google Images query focused on the clue itself,
+                # not the movie title. Examples: "AT&T logo on the phone" -> "AT&T".
+                image_search_term = re.sub(r"(?i)^(?:the|a|an)\\s+", "", search_clue).strip()
+                image_search_term = re.sub(
+                    r"(?i)\\s+(?:logo|symbol|emblem)\\s+(?:displayed\\s+)?(?:on|in)\\s+(?:the\\s+)?(?:phone|screen|device)$",
+                    "",
+                    image_search_term,
+                )
+                image_search_term = re.sub(r"(?i)^contact\\s+name\\s+", "", image_search_term)
+                image_search_term = re.sub(
+                    r"(?i)\\s+(?:displayed|shown|visible)\\s+(?:on|in)\\s+(?:the\\s+)?(?:phone|screen|device)$",
+                    "",
+                    image_search_term,
+                ).strip(" .,:;-") or search_clue
+                google_images_url = "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(image_search_term)
+                snippets.append(
+                    f"QUERY CLUE: {clue}\\nGOOGLE IMAGES (visual lookup only, not proof): {google_images_url}"
+                )
                 search_phrases = [f'"{movie_title}" "{search_clue}" Easter egg explanation']
                 # Numbers may encode a real-world date or tribute. Run a separate, targeted
                 # research query rather than assuming the number's meaning from the frame.
@@ -1087,6 +1116,8 @@ Return only the answer, with no meta commentary.
                 "fictional display, not a real-world date; do not force a date interpretation. Never infer a "
                 "Power Stone, Nova Corps, creator intention, or other specific meaning from color/shape alone. "
                 "Do not treat the visual model's guess as evidence. Include source titles and URLs when available. "
+                "Every finding MUST include a separate clickable Google Images URL specifically searching the clue/object itself (for example, AT&T logo -> Google Images search for AT&T), even when direct evidence links are available. "
+                "Use the supplied GOOGLE IMAGES URL for that clue; it is for visual inspection only, never evidence. "
                 "If a direct article URL is missing, preserve the provided Google Images URL for that clue; "
                 "label it 'Google Images' rather than presenting it as an article proving the claim. Never invent URLs. "
                 "If no distinctive clue has evidence, say that plainly and suggest pausing on a clearer frame. "
