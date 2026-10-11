@@ -546,6 +546,15 @@ class MovieMindQtPlayer(QMainWindow):
                 blocks.append("<hr>")
             heading = f"Discovery {len(self.easter_egg_history) - index + 1} · {item['movie']} · {item['time']}"
             body = html.escape(item["result"])
+            # Render clue-specific image searches as readable links instead of exposing raw URLs.
+            body = re.sub(
+                r"(?m)^GOOGLE_IMAGES_LINK:\\s*(https?://\\S+)",
+                lambda match: (
+                    '<a href="' + html.escape(match.group(1).rstrip('.'), quote=True) + '">'
+                    'Open Google Images for this clue</a>'
+                ),
+                body,
+            )
             body = re.sub(
                 r"(https?://[^\s\]\)>,]+)",
                 lambda match: '<a href="' + html.escape(match.group(0).rstrip('.'), quote=True) + '">' +
@@ -1038,9 +1047,15 @@ Return only the answer, with no meta commentary.
                     "",
                     image_search_term,
                 ).strip(" .,:;-") or search_clue
-                google_images_url = "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(image_search_term)
+                # The result renderer turns this marker into a descriptive clickable link.
+                # Keep the query focused on the object/clue rather than forcing users to search manually.
+                google_images_url = (
+                    "https://www.google.com/search?tbm=isch&q="
+                    + urllib.parse.quote(image_search_term)
+                )
                 snippets.append(
-                    f"QUERY CLUE: {clue}\nGOOGLE IMAGES (visual lookup only, not proof): {google_images_url}"
+                    f"QUERY CLUE: {clue}\n"
+                    f"GOOGLE_IMAGES_LINK: {google_images_url}"
                 )
                 search_phrases = [f'"{movie_title}" "{search_clue}" Easter egg explanation']
                 # Numbers may encode a real-world date or tribute. Run a separate, targeted
