@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QObject, QEvent
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence, QCursor
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QMenu, QMessageBox, QPushButton, QSizePolicy, QSlider, QVBoxLayout,
@@ -79,6 +79,11 @@ class MovieMindQtPlayer(QMainWindow):
         self._fullscreen_controls_timer.setSingleShot(True)
         self._fullscreen_controls_timer.setInterval(2200)
         self._fullscreen_controls_timer.timeout.connect(self._hide_fullscreen_controls)
+        self._last_cursor_pos = QCursor.pos()
+        self._cursor_poll = QTimer(self)
+        self._cursor_poll.setInterval(120)
+        self._cursor_poll.timeout.connect(self._poll_fullscreen_cursor)
+        self._cursor_poll.start()
         self._build_ui()
         self.video_surface.setMouseTracking(True)
         self.video_surface.installEventFilter(self)
@@ -109,18 +114,25 @@ class MovieMindQtPlayer(QMainWindow):
         self.timer.start()
         self._set_status("PLAYER READY")
 
-        open_action = QAction(self)
-        open_action.setShortcut(QKeySequence.Open)
-        open_action.triggered.connect(self.open_movie)
-        self.addAction(open_action)
-        play_action = QAction(self)
-        play_action.setShortcut(QKeySequence("Space"))
-        play_action.triggered.connect(self.toggle_play)
-        self.addAction(play_action)
-        fullscreen_action = QAction("Fullscreen", self)
-        fullscreen_action.setShortcut(QKeySequence("F"))
-        fullscreen_action.triggered.connect(self.toggle_fullscreen)
-        self.addAction(fullscreen_action)
+        self._add_app_shortcut(QKeySequence.Open, self.open_movie)
+        self._add_app_shortcut(QKeySequence("Space"), self.toggle_play)
+        self._add_app_shortcut(QKeySequence("F"), self.toggle_fullscreen)
+        self._add_app_shortcut(QKeySequence("Escape"), self._escape_fullscreen)
+        self._add_app_shortcut(QKeySequence("Left"), lambda: self.skip(-10))
+        self._add_app_shortcut(QKeySequence("Right"), lambda: self.skip(10))
+        self._add_app_shortcut(QKeySequence("Up"), lambda: self.volume.setValue(min(100, self.volume.value() + 5)))
+        self._add_app_shortcut(QKeySequence("Down"), lambda: self.volume.setValue(max(0, self.volume.value() - 5)))
+
+    def _add_app_shortcut(self, sequence, callback) -> None:
+        action = QAction(self)
+        action.setShortcut(sequence)
+        action.setShortcutContext(Qt.ApplicationShortcut)
+        action.triggered.connect(callback)
+        self.addAction(action)
+
+    def _escape_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.toggle_fullscreen()
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -460,6 +472,15 @@ class MovieMindQtPlayer(QMainWindow):
             self.deck.hide()
             self.showFullScreen()
         QTimer.singleShot(100, self._reattach_video)
+
+    def _poll_fullscreen_cursor(self) -> None:
+        if not self.isFullScreen():
+            self._last_cursor_pos = QCursor.pos()
+            return
+        current = QCursor.pos()
+        if current != self._last_cursor_pos:
+            self._last_cursor_pos = current
+            self._show_fullscreen_controls()
 
     def _show_fullscreen_controls(self) -> None:
         if not self.isFullScreen():
