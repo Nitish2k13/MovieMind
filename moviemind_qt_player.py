@@ -1,8 +1,7 @@
 """MovieMind's PySide6 player UI with the existing offline AI companion.
 
-The legacy Tkinter implementation remains unchanged as the reference while
-features are migrated incrementally. The Easter-egg web research pipeline is
-features are migrated incrementally. The legacy Tkinter implementation is left unchanged.
+The legacy Tkinter implementation remains unchanged; its Easter-egg research
+logic is integrated into this Qt prototype.
 """
 from __future__ import annotations
 
