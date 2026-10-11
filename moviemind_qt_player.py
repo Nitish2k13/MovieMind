@@ -139,6 +139,7 @@ class MovieMindQtPlayer(QMainWindow):
         root.setObjectName("root")
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
+        self.outer_layout = outer
         outer.setContentsMargins(24, 18, 24, 22)
         outer.setSpacing(16)
 
@@ -167,6 +168,14 @@ class MovieMindQtPlayer(QMainWindow):
 
         self.video_surface = QFrame()
         self.video_surface.setObjectName("surface")
+        self.fullscreen_title = QLabel("", self.video_surface)
+        self.fullscreen_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.fullscreen_title.setStyleSheet(
+            "QLabel { color:#EAF3FF; background:rgba(5,15,29,220); "
+            "border:1px solid #376BA3; border-radius:9px; "
+            "padding:8px 13px; font-size:12px; font-weight:700; }"
+        )
+        self.fullscreen_title.hide()
         self.video_surface.setMinimumSize(560, 320)
         self.video_surface.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video_surface.setStyleSheet("background:#02060c; border:1px solid #1b3552; border-radius:14px;")
@@ -323,6 +332,7 @@ class MovieMindQtPlayer(QMainWindow):
             clean_title = self._trim_movie_title(path)
             self.title_value.setText(clean_title)
             self.movie_name.setText(clean_title.upper()[:48])
+            self.fullscreen_title.setText(clean_title)
             self._set_status("OPENING MOVIE")
             QTimer.singleShot(350, self._reattach_video)
         except Exception as exc:
@@ -469,23 +479,35 @@ class MovieMindQtPlayer(QMainWindow):
             self.deck.hide()
             self.deck.setParent(None)
             self.left_layout.addWidget(self.deck)
+            self.fullscreen_title.hide()
             self.showNormal()
+            self.outer_layout.setContentsMargins(24, 18, 24, 22)
             self.header.show()
             self.sidebar.show()
             self.deck.show()
             self.setFocus()
         else:
-            # Keep the same VLC video surface/native handle. Rebinding the VLC
-            # window handle during fullscreen transitions can interrupt playback/audio.
+            self.outer_layout.setContentsMargins(0, 0, 0, 0)
             self.header.hide()
             self.sidebar.hide()
             self.left_layout.removeWidget(self.deck)
             self.deck.setParent(self.video_surface)
             self.deck.setGeometry(self._overlay_deck_geometry())
             self.deck.hide()
+            self.fullscreen_title.show()
+            self._position_fullscreen_title()
             self.showFullScreen()
             self.video_surface.setFocus()
         self.update()
+
+    def _position_fullscreen_title(self) -> None:
+        if not self.current_path:
+            self.fullscreen_title.hide()
+            return
+        self.fullscreen_title.adjustSize()
+        width = min(self.fullscreen_title.sizeHint().width(), max(220, self.video_surface.width() - 32))
+        self.fullscreen_title.setGeometry(self.video_surface.width() - width - 24, 20, width, 38)
+        self.fullscreen_title.raise_()
 
     def _overlay_deck_geometry(self):
         margin = 22
@@ -497,8 +519,10 @@ class MovieMindQtPlayer(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if self.isFullScreen() and self.deck.parent() is self.video_surface:
-            self.deck.setGeometry(self._overlay_deck_geometry())
+        if self.isFullScreen():
+            if self.deck.parent() is self.video_surface:
+                self.deck.setGeometry(self._overlay_deck_geometry())
+            self._position_fullscreen_title()
 
     def _poll_fullscreen_cursor(self) -> None:
         if not self.isFullScreen():
