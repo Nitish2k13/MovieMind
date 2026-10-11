@@ -221,8 +221,11 @@ class MovieMindPlayer:
         self.question_entry.bind("<KeyPress>", self._question_typing_started, add="+")
         self.input_frame.pack(fill="x", padx=14)
         self.title_entry.bind("<KeyPress>", self._question_typing_started, add="+")
-        self.ask_button = self._button(companion, "Ask MovieMind", self.ask_movie)
-        self.ask_button.pack(anchor="w", padx=14, pady=(0, 8))
+        self.mode_heading = tk.Label(
+            companion, text="Ask a question", bg=PANEL, fg=TEXT,
+            font=("Segoe UI", 12, "bold"), anchor="w", justify="left"
+        )
+        self.mode_heading.pack(fill="x", padx=14, pady=(2, 10))
         self.answer_label = tk.Label(
             companion, text="Choose a mode, load subtitles for better context, then ask MovieMind.",
             bg=PANEL, fg=MUTED, wraplength=250, justify="left",
@@ -836,7 +839,7 @@ class MovieMindPlayer:
             self.question_entry.selection_clear()
             # Move focus to a real Tk control; the VLC native video child is not
             # reliably focusable through Tk on Windows.
-            self.ask_button.focus_set()
+            self.mode_heading.focus_set()
             self.root.focus_force()
         except tk.TclError:
             pass
@@ -846,7 +849,7 @@ class MovieMindPlayer:
         needs_input = mode in ("Ask a question", "Explain a word")
         if needs_input:
             if not self.input_frame.winfo_manager():
-                self.input_frame.pack(fill="x", padx=14, before=self.ask_button)
+                self.input_frame.pack(fill="x", padx=14, before=self.mode_heading)
             self.input_label.config(
                 text="ASK ABOUT THIS MOVIE" if mode == "Ask a question" else "WORD OR PHRASE"
             )
@@ -857,14 +860,8 @@ class MovieMindPlayer:
         else:
             self.input_frame.pack_forget()
 
-        button_labels = {
-            "Movie overview": "Get Movie Overview",
-            "Ask a question": "Ask MovieMind",
-            "Explain scene": "Explain Current Scene",
-            "Explain dialogue": "Explain Current Dialogue",
-            "Explain a word": "Explain Word",
-        }
-        self.ask_button.config(text=button_labels.get(mode, "Ask MovieMind"))
+        # The selected mode is the section heading; non-input modes run automatically.
+        self.mode_heading.config(text=mode)
         if mode == "Movie overview":
             self.answer_label.config(
                 text="Get an offline overview with runtime, director, cast, and synopsis.",
@@ -1208,6 +1205,12 @@ Return only the answer, with no meta commentary.
         def finish() -> None:
             self.ai_request_running = False
             try:
+                if result:
+                    # Keep model output readable in a plain Tk label; remove Markdown markers.
+                    import re
+                    result = re.sub(r"(?<!\\*)\\*\\*(.+?)\\*\\*(?!\\*)", r"\\1", result)
+                    result = re.sub(r"(?<!\\*)\\*(?!\\s)(.+?)(?<!\\s)\\*(?!\\*)", r"\\1", result)
+                    result = re.sub(r"(?m)^\\s*[-*]\\s+", "• ", result)
                 if error:
                     self.answer_label.config(text=error, fg="#fca5a5")
                     self.status_label.config(text="LOCAL AI UNAVAILABLE", fg="#fca5a5")
