@@ -1208,8 +1208,7 @@ Return only the answer, with no meta commentary.
                 if result:
                     # Keep model output readable in a plain Tk label; remove Markdown markers.
                     import re
-                    result = re.sub(r"(?<!\\*)\\*\\*(.+?)\\*\\*(?!\\*)", r"\\1", result)
-                    result = re.sub(r"(?<!\\*)\\*(?!\\s)(.+?)(?<!\\s)\\*(?!\\*)", r"\\1", result)
+                    result = re.sub(r"\\*\\*(.*?)\\*\\*", r"\\1", result)
                     result = re.sub(r"(?m)^\\s*[-*]\\s+", "• ", result)
                 if error:
                     self.answer_label.config(text=error, fg="#fca5a5")
