@@ -143,6 +143,7 @@ class MovieMindQtPlayer(QMainWindow):
         outer.setSpacing(16)
 
         header = QFrame()
+        self.header = header
         header.setObjectName("topbar")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 15)
@@ -160,6 +161,7 @@ class MovieMindQtPlayer(QMainWindow):
         outer.addLayout(content, 1)
 
         left = QVBoxLayout()
+        self.left_layout = left
         left.setSpacing(14)
         content.addLayout(left, 1)
 
@@ -464,14 +466,39 @@ class MovieMindQtPlayer(QMainWindow):
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
             self._fullscreen_controls_timer.stop()
-            self.deck.show()
+            self.deck.hide()
+            self.deck.setParent(None)
+            self.left_layout.addWidget(self.deck)
             self.showNormal()
+            self.header.show()
             self.sidebar.show()
+            self.deck.show()
+            self.setFocus()
         else:
+            # Keep the same VLC video surface/native handle. Rebinding the VLC
+            # window handle during fullscreen transitions can interrupt playback/audio.
+            self.header.hide()
             self.sidebar.hide()
+            self.left_layout.removeWidget(self.deck)
+            self.deck.setParent(self.video_surface)
+            self.deck.setGeometry(self._overlay_deck_geometry())
             self.deck.hide()
             self.showFullScreen()
-        QTimer.singleShot(100, self._reattach_video)
+            self.video_surface.setFocus()
+        self.update()
+
+    def _overlay_deck_geometry(self):
+        margin = 22
+        height = min(112, max(88, self.video_surface.height() // 7))
+        return self.video_surface.rect().adjusted(
+            margin, self.video_surface.height() - height - margin,
+            -margin, -margin
+        )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self.isFullScreen() and self.deck.parent() is self.video_surface:
+            self.deck.setGeometry(self._overlay_deck_geometry())
 
     def _poll_fullscreen_cursor(self) -> None:
         if not self.isFullScreen():
