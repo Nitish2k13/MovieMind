@@ -1108,10 +1108,15 @@ SOURCE ANSWER:
             question_for_memory = "Movie overview"
         elif mode == "Explain scene":
             task = (
-                "Explain the CURRENT visible scene in 4-6 useful sentences. Describe only "
-                "details supported by the attached frame. Explain the apparent interaction "
-                "when supported. If no frame is available, explicitly say that visual evidence "
-                "was unavailable and use subtitles only."
+                "Explain the CURRENT visible scene in 3-5 useful sentences. Describe only "
+                "details supported by the attached frame. Be especially careful with character "
+                "identity: do not identify a person as Peter Parker, Tony Stark, Doctor Strange, "
+                "or anyone else from the subtitle alone or from a generic pose. Use the visible "
+                "face, clothing, scene context, and movie knowledge together; if identity is not "
+                "clear, say 'the man/person in the frame' rather than guessing. A subtitle may be "
+                "spoken by someone off-screen and does not prove who is visible. Do not add "
+                "setting details such as haunted/formal unless clearly supported by the frame. "
+                "If no frame is available, explicitly say visual evidence was unavailable."
             )
             question_for_memory = "Explain the scene"
         elif mode == "Explain dialogue":
@@ -1274,14 +1279,16 @@ Return only the answer, with no meta commentary.
             with open(snapshot_path, "rb") as frame_file:
                 image_b64 = base64.b64encode(frame_file.read()).decode("ascii")
             vision_prompt = (
-                f"Movie: {movie_title}. Inspect this movie frame for up to 4 distinctive, actually visible "
-                "objects, logos, symbols, posters, signs, unusual props, background details, or design motifs "
-                "that could be researched as possible Easter eggs. Ignore subtitles and the player UI. "
-                "Describe colors conservatively: only name a color if it is clearly visible in the supplied frame; "
-                "never call a yellow, amber, warm-white, or gold object blue. If uncertain, say 'lamp with a warm "
-                "yellow shade' or describe shape/material without asserting a color. Do not infer a character, "
-                "location, or Easter egg from a generic object alone. Return concise observable clues only, one "
-                "per line. If nothing distinctive is visible, say that. Do not claim a clue is an Easter egg."
+                f"Movie: {movie_title}. Inspect this exact frame and list at most 3 visually distinctive "
+                "details that could plausibly be researched as a movie-specific Easter egg. Prioritize unusual "
+                "symbols, recognizable props, logos, artwork, posters, readable signs, repeated motifs, or objects "
+                "with a specific franchise connection. Do NOT list generic furniture (ordinary sofas, lamps, "
+                "bookshelves, carpets, stairs) unless a unique marking or design makes it specifically meaningful. "
+                "Ignore subtitles and player UI. First describe what is plainly visible; do not infer hidden meaning. "
+                "Only state a color when it is clear in the frame; if uncertain, omit the color. Never invent a blue "
+                "lamp or other color/detail that is not plainly visible. Do not identify characters unless highly "
+                "confident from visual evidence and movie context. Return one short line per clue, or say no "
+                "distinctive movie-specific clue is visible. These are candidates, not confirmed Easter eggs."
             )
             payload = json.dumps({
                 "model": "gemma3:4b", "prompt": vision_prompt, "images": [image_b64],
@@ -1317,15 +1324,19 @@ Return only the answer, with no meta commentary.
             except Exception as exc:
                 web_evidence = f"Online search could not be completed: {type(exc).__name__}: {exc}"
             synthesis_prompt = (
-                f"You are MovieMind's Easter egg researcher. Reply in {language}. Movie: {movie_title}.\n"
-                f"VISIBLE CLUES FROM THE FRAME (model-generated, may be wrong):\n{clues}\n\n"
+                f"You are MovieMind's careful Easter-egg researcher. Reply in {language}. Movie: {movie_title}.\n"
+                f"VISIBLE CLUE CANDIDATES (the vision model can be wrong):\n{clues}\n\n"
                 f"WEB SEARCH RESULTS (unverified snippets):\n{web_evidence}\n\n"
-                "Give up to 4 concise findings. For each, state OBSERVED CLUE, POSSIBLE CONNECTION, "
-                "EVIDENCE and STATUS (CONFIRMED only if a result explicitly supports this exact clue in "
-                "this movie; otherwise POSSIBLE or NOT VERIFIED). Cite search result URLs or titles in text. "
-                "Do not invent hidden details or say generic franchise pages prove a specific Easter egg. "
-                "If evidence is weak, say so and still explain what is visibly distinctive. If no clues are "
-                "visible, ask the user to try another frame. Keep it concise."
+                "Return at most 3 findings in plain text, without Markdown bold markers (**), using this format: "
+                "Clue: ...\nPossible connection: ...\nEvidence: ...\nStatus: CONFIRMED / POSSIBLE / NOT VERIFIED. "
+                "Do not pad the answer with ordinary set dressing. A sofa, lamp, bookshelf, carpet, or staircase "
+                "is not an Easter egg by itself; include it only if a reliable result links that specific visible "
+                "detail to this exact movie. CONFIRMED requires a source that supports the exact detail in this "
+                "movie, not merely a franchise wiki or generic article. If search results do not support a clue, "
+                "say NOT VERIFIED and do not invent a character, location, symbolic meaning, or creator intent. "
+                "Do not treat the visual model's guess as evidence. Include short source titles/URLs when available. "
+                "If no distinctive clue has evidence, say that plainly and suggest pausing on a clearer frame. "
+                "Keep the answer concise and stop after the third finding."
             )
             payload = json.dumps({
                 "model": "gemma3:4b", "prompt": synthesis_prompt, "stream": False,
