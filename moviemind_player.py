@@ -68,6 +68,7 @@ class MovieMindPlayer:
         self._key_poll_id = None
         self._keys_down: set[int] = set()
         self._keyboard_media_mode = True
+        self._pending_snapshot_paths: set[str] = set()
         self._track_popup = None
         self._after_id = None
 
@@ -1152,6 +1153,9 @@ Return only the answer, with no meta commentary.
         except Exception:
             snapshot_path = None
 
+        if snapshot_path:
+            self._pending_snapshot_paths.add(snapshot_path)
+
         request_context = {
             "kind": "answer",
             "mode": mode,
@@ -1228,6 +1232,8 @@ Return only the answer, with no meta commentary.
                         os.remove(snapshot_path)
                 except OSError:
                     pass
+                finally:
+                    self._pending_snapshot_paths.discard(snapshot_path)
 
         def finish() -> None:
             self.ai_request_running = False
@@ -1669,6 +1675,14 @@ Return only the answer, with no meta commentary.
 
     def close(self) -> None:
         self._closing = True
+        # Remove any in-flight temporary frame captures when the user exits.
+        for snapshot_path in tuple(self._pending_snapshot_paths):
+            try:
+                if os.path.exists(snapshot_path):
+                    os.remove(snapshot_path)
+            except OSError:
+                pass
+        self._pending_snapshot_paths.clear()
         if self._key_poll_id is not None:
             try:
                 self.root.after_cancel(self._key_poll_id)
