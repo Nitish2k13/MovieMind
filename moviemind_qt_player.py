@@ -650,9 +650,12 @@ class MovieMindQtPlayer(QMainWindow):
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Type.WindowDeactivate and watched is self:
-            self._fullscreen_controls_timer.stop()
-            self.deck.hide()
-            self.fullscreen_overlay.hide()
+            # Losing focus must not hide the ordinary playback deck. Only hide
+            # the separate fullscreen overlay so it cannot float over other apps.
+            if self.isFullScreen():
+                self._fullscreen_controls_timer.stop()
+                self.deck.hide()
+                self.fullscreen_overlay.hide()
         elif event.type() == QEvent.Type.WindowActivate and watched is self:
             if self.isFullScreen():
                 self._last_cursor_pos = QCursor.pos()
