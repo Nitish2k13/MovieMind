@@ -244,26 +244,19 @@ class MovieMindQtPlayer(QMainWindow):
         deck_layout.addLayout(controls)
         left.addWidget(deck)
 
-        # A separate transparent top-level overlay is required because VLC's
-        # native video child window can paint above ordinary Qt child widgets.
+        # Use a native overlay only for the bottom control strip. A full-window
+        # transparent overlay can cover VLC's native video surface on Windows.
         self.fullscreen_overlay = QWidget(
             self, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
         )
-        # Keep the overlay as a real native top-level window. VLC uses a native
-        # video HWND on Windows; without a native, topmost Qt window, the video
-        # surface can win the stacking order and eat clicks on the controls.
         self.fullscreen_overlay.setAttribute(Qt.WA_NativeWindow, True)
         self.fullscreen_overlay.setAttribute(Qt.WA_StyledBackground, True)
-        self.fullscreen_overlay.setStyleSheet("background: transparent;")
+        self.fullscreen_overlay.setStyleSheet(
+            "background:#0c1a2d; border:1px solid #1b385a; border-radius:12px;"
+        )
         self.fullscreen_overlay.setMouseTracking(True)
         self.fullscreen_overlay.installEventFilter(self)
         self.fullscreen_title = QLabel("", self.fullscreen_overlay)
-        self.fullscreen_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.fullscreen_title.setStyleSheet(
-            "QLabel { color:#EAF3FF; background:#08172B; "
-            "border:1px solid #376BA3; border-radius:9px; "
-            "padding:8px 13px; font-size:12px; font-weight:700; }"
-        )
         self.fullscreen_title.hide()
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidepanel")
@@ -471,13 +464,6 @@ class MovieMindQtPlayer(QMainWindow):
             QMessageBox.information(self, "Tracks", "Open a movie first.")
             return
         menu = QMenu(button)
-        # Some VLC streams only apply track changes reliably while paused.
-        # Pause temporarily for selection, then resume only if it was playing.
-        was_playing = self.player.get_state() == vlc.State.Playing
-        if was_playing:
-            self.player.set_pause(1)
-        self._track_menu_open = True
-        self._fullscreen_controls_timer.stop()
         try:
             if kind == "audio":
                 tracks = self.player.audio_get_track_description() or []
@@ -491,33 +477,28 @@ class MovieMindQtPlayer(QMainWindow):
                 menu.addAction("No tracks reported by VLC").setEnabled(False)
             for track_id, name in tracks:
                 action = menu.addAction(("✓  " if int(track_id) == int(current) else "") + str(name))
-                action.triggered.connect(lambda checked=False, tid=int(track_id): self._apply_track_and_resume(setter, tid, was_playing))
+                action.triggered.connect(
+                    lambda checked=False, tid=int(track_id), set_track=setter:
+                    self._apply_track(set_track, tid)
+                )
         except Exception as exc:
             menu.addAction(f"Could not read tracks: {exc}").setEnabled(False)
+        # Keep the deck visible while its popup is open; never pause playback just
+        # to display the track list.
+        self._track_menu_open = True
+        self._fullscreen_controls_timer.stop()
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
         self._track_menu_open = False
-        if was_playing and self.player:
-            # Resume after VLC has applied the selected track, including when the
-            # user dismisses the menu without selecting an item.
-            QTimer.singleShot(250, lambda: self._resume_after_track_menu())
-        elif self.isFullScreen():
-            self._fullscreen_controls_timer.start()
+        if self.isFullScreen():
+            self._fullscreen_controls_timer.start(2200)
 
-    def _apply_track_and_resume(self, setter, track_id: int, was_playing: bool) -> None:
+    def _apply_track(self, setter, track_id: int) -> None:
         try:
-            setter(track_id)
+            result = setter(track_id)
+            if result == -1:
+                self._set_status("VLC COULD NOT APPLY TRACK")
         except Exception as exc:
             self._set_status(f"TRACK CHANGE FAILED: {exc}")
-        if was_playing:
-            QTimer.singleShot(250, self._resume_after_track_menu)
-
-    def _resume_after_track_menu(self) -> None:
-        if self.player and self.player.get_state() == vlc.State.Paused:
-            self.player.set_pause(0)
-            self.play_button.setText("Ⅱ")
-            self._set_status("PLAYING")
-        if self.isFullScreen() and not self._track_menu_open:
-            self._fullscreen_controls_timer.start()
 
     def show_audio_menu(self) -> None:
         self._track_menu(self.audio_button, "audio")
@@ -525,25 +506,8 @@ class MovieMindQtPlayer(QMainWindow):
     def show_subtitle_menu(self) -> None:
         self._track_menu(self.subtitle_button, "subtitle")
 
-    @staticmethod
-    def _trim_movie_title(path: str) -> str:
-        """Turn noisy release filenames into a readable movie title."""
-        title = Path(path).stem
-        title = re.sub(r"^@?MovieBox[_ .-]*Studios?\s*", "", title, flags=re.I)
-        title = re.sub(r"^@[A-Za-z0-9_.-]+\s+", "", title)
-        title = re.sub(
-            r"(?i)\s+(?:blu[ .-]?ray|web[ .-]?dl|web[ .-]?rip|hdrip|brrip|"
-            r"dvdrip|x264|x265|hevc|1080p|720p|2160p|4k|proper|extended|"
-            r"remux|h\.?264|h\.?265)\b.*$",
-            "", title,
-        )
-        title = re.sub(r"\s*[-_.]+\s*(?:mkv|mp4|avi)$", "", title, flags=re.I)
-        title = re.sub(r"[._]+", " ", title)
-        return re.sub(r"\s+", " ", title).strip(" -_.") or Path(path).stem
-
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
-            # Restore the exact window mode the user had before fullscreen.
             was_maximized = self._was_maximized_before_fullscreen
             normal_geometry = self._normal_geometry_before_fullscreen
             self._fullscreen_controls_timer.stop()
@@ -574,20 +538,18 @@ class MovieMindQtPlayer(QMainWindow):
             self.left_layout.removeWidget(self.deck)
             self.deck.hide()
             self.deck.setParent(self.fullscreen_overlay)
-            self.deck.setGeometry(24, max(0, self.height() - 136), max(300, self.width() - 48), 112)
-            self.fullscreen_title.setText(self.title_value.text())
-            self.fullscreen_title.show() if self.current_path else self.fullscreen_title.hide()
+            self.fullscreen_title.hide()
             self.showFullScreen()
-            self.fullscreen_overlay.show()
             self._position_fullscreen_overlay()
+            self.fullscreen_overlay.show()
             self.fullscreen_overlay.raise_()
-            self.fullscreen_overlay.activateWindow()
-            self.deck.hide()
+            self.deck.show()
+            self.deck.raise_()
+            self._fullscreen_controls_timer.start()
             self.video_surface.setFocus()
         self.update()
 
     def _restore_layout_after_fullscreen(self) -> None:
-        # Let Qt finish the window-state transition before recalculating layouts.
         self.centralWidget().updateGeometry()
         self.centralWidget().layout().activate()
         self.left_layout.activate()
@@ -597,21 +559,15 @@ class MovieMindQtPlayer(QMainWindow):
     def _position_fullscreen_overlay(self) -> None:
         if not self.isFullScreen():
             return
+        # The native overlay occupies only the bottom control strip; the VLC
+        # video surface remains unobstructed for the entire movie frame.
+        strip_height = 142
         top_left = self.mapToGlobal(self.rect().topLeft())
-        wanted_geometry = (top_left.x(), top_left.y(), self.width(), self.height())
-        current_geometry = self.fullscreen_overlay.geometry()
-        if (current_geometry.x(), current_geometry.y(), current_geometry.width(), current_geometry.height()) != wanted_geometry:
-            self.fullscreen_overlay.setGeometry(*wanted_geometry)
-        margin = 24
-        height = min(112, max(88, self.height() // 7))
-        self.deck.setGeometry(
-            margin, self.height() - height - margin,
-            max(300, self.width() - 2 * margin), height
+        self.fullscreen_overlay.setGeometry(
+            top_left.x(), top_left.y() + self.height() - strip_height,
+            self.width(), strip_height
         )
-        self.fullscreen_title.adjustSize()
-        title_width = min(self.fullscreen_title.sizeHint().width(), max(220, self.width() - 32))
-        self.fullscreen_title.setGeometry(self.width() - title_width - 24, 20, title_width, 38)
-        self.fullscreen_title.raise_()
+        self.deck.setGeometry(0, 0, self.width(), strip_height)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
