@@ -338,6 +338,13 @@ class MovieMindPlayer:
             self.movie_title = detected_title
             self.title_var.set(detected_title)
             self.subtitle_context.clear()
+            self.recent_qa_memory.clear()
+            self.last_answer_source = ""
+            self.last_answer_source_language = self.reply_language
+            self.answer_label.config(
+                text="New movie session started. Ask about the current scene or dialogue.",
+                fg=MUTED,
+            )
             self.context_label.config(text="Subtitle context: not loaded")
             self.file_label.config(text=Path(path).name)
             self.status_label.config(text="MOVIE LOADED · CHECK TITLE", fg="#c4b5fd")
@@ -915,7 +922,7 @@ SOURCE ANSWER:
             word.lower().strip(".,!?;:\"'()[]{}")
             for word in user_input.split()
             if len(word.strip(".,!?;:\"'()[]{}")) > 3
-        }
+        } if mode in ("Ask a question", "Explain a word") else set()
         matching = [
             item for item in self.subtitle_context
             if words and any(word in str(item["text"]).lower() for word in words)
