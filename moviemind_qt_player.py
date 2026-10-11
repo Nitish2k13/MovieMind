@@ -106,7 +106,10 @@ class MovieMindQtPlayer(QMainWindow):
         play_action.setShortcut(QKeySequence("Space"))
         play_action.triggered.connect(self.toggle_play)
         self.addAction(play_action)
-        self.addAction(QAction("Fullscreen", self, shortcut=QKeySequence("F"), triggered=self.toggle_fullscreen))
+        fullscreen_action = QAction("Fullscreen", self)
+        fullscreen_action.setShortcut(QKeySequence("F"))
+        fullscreen_action.triggered.connect(self.toggle_fullscreen)
+        self.addAction(fullscreen_action)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -212,7 +215,9 @@ class MovieMindQtPlayer(QMainWindow):
         side = QVBoxLayout(self.sidebar)
         side.setContentsMargins(20, 22, 20, 20)
         side.setSpacing(13)
-        side.addWidget(QLabel("MOVIEMIND AI", objectName="eyebrow"))
+        side_eyebrow = QLabel("MOVIEMIND AI")
+        side_eyebrow.setObjectName("eyebrow")
+        side.addWidget(side_eyebrow)
         title = QLabel("Your movie companion")
         title.setStyleSheet("font-size:20px; font-weight:750;")
         side.addWidget(title)
