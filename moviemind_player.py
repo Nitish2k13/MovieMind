@@ -167,9 +167,8 @@ class MovieMindPlayer:
         self.question_entry.bind("<Return>", self._submit_question)
         self.question_entry.bind("<KeyPress>", self._question_typing_started, add="+")
         self.title_entry.bind("<KeyPress>", self._question_typing_started, add="+")
-        self._button(companion, "Ask MovieMind", self.ask_movie).pack(
-            anchor="w", padx=14, pady=(0, 8)
-        )
+        self.ask_button = self._button(companion, "Ask MovieMind", self.ask_movie)
+        self.ask_button.pack(anchor="w", padx=14, pady=(0, 8))
         self.answer_label = tk.Label(
             companion, text="Load an external subtitle file, then ask a question.",
             bg=PANEL, fg=MUTED, wraplength=250, justify="left",
@@ -693,7 +692,9 @@ class MovieMindPlayer:
     def _restore_player_keyboard_focus(self) -> None:
         try:
             self.question_entry.selection_clear()
-            self.video_frame.focus_set()
+            # Move focus to a real Tk control; the VLC native video child is not
+            # reliably focusable through Tk on Windows.
+            self.ask_button.focus_set()
             self.root.focus_force()
         except tk.TclError:
             pass
