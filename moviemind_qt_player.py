@@ -1,8 +1,8 @@
-"""MovieMind Qt player UI prototype.
+"""MovieMind's PySide6 player UI with the existing offline AI companion.
 
-This is an isolated PySide6/VLC UI migration prototype. It does not replace
-moviemind_player.py yet; AI/Ollama/Easter-egg features remain in the existing
-Tkinter application until they can be migrated and tested.
+The legacy Tkinter implementation remains unchanged as the reference while
+features are migrated incrementally. The Easter-egg web research pipeline is
+still pending migration; normal AI modes use local Ollama only.
 """
 from __future__ import annotations
 
@@ -565,7 +565,7 @@ class MovieMindQtPlayer(QMainWindow):
                 seen.add(key)
                 selected.append(item)
         context = "\n".join(
-            f"[{self._format_time(int(item['start_ms']))}] {item['text']}"
+            f"[{clock(int(item['start_ms']))}] {item['text']}"
             for item in selected[-18:]
         ) or "No timestamped subtitle context is available."
         current_subtitle = self._current_subtitle(current_ms) or "No subtitle line is active at this exact playback time."
@@ -597,19 +597,30 @@ class MovieMindQtPlayer(QMainWindow):
             question_for_memory = "Movie overview"
         elif mode == "Explain scene":
             task = (
-                "Give a useful scene explanation in up to 4 sentences: identify characters only when supported "
-                "by the frame and movie context, explain the immediate action, relate the exact current subtitle "
-                "if it genuinely fits, and state dramatic significance only when supported. Never identify a "
-                "character from subtitle or clothing color alone. Do not invent objects, motivations, or plot events. "
-                "If identity or action is uncertain, say so instead of guessing."
+                "Give a useful scene explanation, not just a list of visible objects. Use up to 4 "
+                "sentences: (1) identify the characters only when supported by the frame and movie "
+                "context; (2) explain their immediate situation/action; (3) explain how the exact "
+                "current subtitle relates to the interaction, if it genuinely fits; (4) briefly state "
+                "the dramatic significance only when supported by reliable movie knowledge. For "
+                "Avengers: Infinity War, the line 'You're not the only one cursed with knowledge' "
+                "is said by Thanos to Doctor Strange on Titan; if the current frame and subtitle match "
+                "that moment, explain their conflict over knowledge and the future without inventing "
+                "extra actions. Do not assume every frame belongs to that moment. Never call a person "
+                "Rocket, Quill, Stark, Strange, or Thanos solely from a subtitle or clothing color. "
+                "Do not invent objects, motivations, or plot events. If the frame alone cannot establish "
+                "identity or action, state what is uncertain instead of guessing."
             )
             question_for_memory = "Explain the scene"
         elif mode == "Explain dialogue":
             task = (
-                "Explain the CURRENT subtitle in at most 3 short sentences. Refer to the exact available subtitle, "
-                "explain its plain meaning and immediate implication, and do not invent a different scene, object, "
-                "character, speaker, or motive. A line addressing a character does not identify the speaker. "
-                "If speaker or context is uncertain, say so briefly."
+                "Explain the CURRENT subtitle in at most 3 short sentences. First quote or refer "
+                "to the exact available subtitle. Explain its plain meaning and immediate implication "
+                "without inventing a different scene, object, character, or motive. Do not assign a "
+                "speaker unless the supplied subtitle/context explicitly identifies one or it is "
+                "otherwise reliably established. A line addressing a character does not identify the "
+                "speaker. Use nearby subtitles only if they are temporally relevant and consistent "
+                "with the current line. If speaker or context is uncertain, say so briefly. Never "
+                "replace this scene with a familiar plot from another movie."
             )
             question_for_memory = "Explain the current dialogue"
         elif mode == "Explain a word":
