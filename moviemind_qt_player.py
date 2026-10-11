@@ -515,7 +515,10 @@ class MovieMindQtPlayer(QMainWindow):
     def _position_fullscreen_overlay(self) -> None:
         if not self.isFullScreen():
             return
-        self.fullscreen_overlay.setGeometry(self.rect())
+        top_left = self.mapToGlobal(self.rect().topLeft())
+        self.fullscreen_overlay.setGeometry(
+            top_left.x(), top_left.y(), self.width(), self.height()
+        )
         self.fullscreen_overlay.raise_()
         margin = 24
         height = min(112, max(88, self.height() // 7))
