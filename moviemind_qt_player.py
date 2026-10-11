@@ -113,7 +113,7 @@ class MovieMindQtPlayer(QMainWindow):
         self._visual_last_full_ocr = 0.0
         self._visual_last_saved = 0.0
         self._visual_monitor = QTimer(self)
-        self._visual_monitor.setInterval(1000)
+        self._visual_monitor.setInterval(2000)
         self._visual_monitor.timeout.connect(self._sample_visual_memory)
         self._visual_monitor.start()
         self._pending_snapshot_paths: set[str] = set()
@@ -995,7 +995,7 @@ Return only the answer, with no meta commentary.
         return sum(abs(x - y) for x, y in zip(a, b)) / (255 * len(a))
 
     def _sample_visual_memory(self) -> None:
-        """Request one lightweight VLC frame sample per second; no AI inference runs here."""
+        """Request a lightweight VLC frame sample every two seconds; no AI inference runs here."""
         if not self.player or not self.current_path or self._visual_sample_in_flight:
             return
         try:
