@@ -1121,23 +1121,28 @@ SOURCE ANSWER:
             question_for_memory = "Movie overview"
         elif mode == "Explain scene":
             task = (
-                "Explain the CURRENT visible scene in 3-5 useful sentences. Describe only "
-                "details supported by the attached frame. Be especially careful with character "
-                "identity: do not identify a person as Peter Parker, Tony Stark, Doctor Strange, "
-                "or anyone else from the subtitle alone or from a generic pose. Use the visible "
-                "face, clothing, scene context, and movie knowledge together; if identity is not "
-                "clear, say 'the man/person in the frame' rather than guessing. A subtitle may be "
-                "spoken by someone off-screen and does not prove who is visible. Do not add "
-                "setting details such as haunted/formal unless clearly supported by the frame. "
-                "If no frame is available, explicitly say visual evidence was unavailable."
+                "Explain the CURRENT visible frame in at most 3 short sentences. Start with only "
+                "observable actions, clothing, objects, and setting. Identify a character by name "
+                "only if the frame plus reliable movie context makes the identity clear; otherwise "
+                "say 'the person on the left/right' or 'the figure in the frame'. Do not infer "
+                "identity from subtitle wording, a red suit, skin color, or a generic pose. Never "
+                "invent an object (for example, call something an orb only if it visibly has that "
+                "shape and appearance). The subtitle may belong to an off-screen speaker and is "
+                "not proof of who appears in the frame. If the frame is dark, ambiguous, or unclear, "
+                "state that limitation rather than completing the scene from imagination. Separate "
+                "what is visible from any interpretation."
             )
             question_for_memory = "Explain the scene"
         elif mode == "Explain dialogue":
             task = (
-                "Explain the current subtitle/dialogue in 2-4 useful sentences. Explain the "
-                "speaker's likely intended meaning and implication, and connect it to nearby "
-                "dialogue only when supported. Do not merely repeat the line. If no reliable "
-                "current subtitle is available, say so and use nearby subtitles cautiously."
+                "Explain the CURRENT subtitle in at most 3 short sentences. First quote or refer "
+                "to the exact available subtitle. Explain its plain meaning and immediate implication "
+                "without inventing a different scene, object, character, or motive. Do not assign a "
+                "speaker unless the supplied subtitle/context explicitly identifies one or it is "
+                "otherwise reliably established. A line addressing a character does not identify the "
+                "speaker. Use nearby subtitles only if they are temporally relevant and consistent "
+                "with the current line. If speaker or context is uncertain, say so briefly. Never "
+                "replace this scene with a familiar plot from another movie."
             )
             question_for_memory = "Explain the current dialogue"
         elif mode == "Explain a word":
@@ -1184,6 +1189,8 @@ OFFLINE AND EVIDENCE RULES:
 - Recent conversation memory helps with continuity but is not proof of a fact.
 - Never invent character identities, relationships, actions, motivations, movie credits, or plot events.
 - Do not claim to see a screenshot if it was not attached or is not readable.
+- For scene/dialogue answers, prefer a brief accurate description over a detailed guess. If identity, object, speaker, or context is uncertain, explicitly say so instead of filling the gap with familiar franchise lore.
+- Do not use a prior answer from conversation memory as evidence; previous answers may be hallucinated.
 - Distinguish direct evidence from interpretation; state uncertainty briefly when needed.
 - Do not treat a subtitle as proof of who is speaking unless the evidence supports it.
 - Do not expose hidden reasoning or repeat the user's question.
@@ -1453,6 +1460,11 @@ Return only the answer, with no meta commentary.
                 "a credible source that explicitly supports the exact detail in this exact movie. A generic franchise "
                 "page, a search query, a similar-looking emblem, or an unsupported fan theory is not enough. "
                 "If snippets are vague, contradictory, or do not mention the specific clue, use NOT VERIFIED. "
+                "A Google Images link is only a way to inspect pictures and is NEVER evidence for a claim. "
+                "If only a Google Images link is available and no credible source supports the connection, "
+                "the status MUST be NOT VERIFIED and the possible connection should be described as unknown. "
+                "Never use CONFIRMED just because the visual clue itself is visible; confirmation is about "
+                "the claimed Easter-egg meaning, not the existence of an object in the frame. "
                 "Use POSSIBLE only when a source provides a plausible but incomplete connection. For visible "
                 "numbers, dates, digital clocks, signs, or license plates, investigate whether the exact number "
                 "is documented as a cast/crew birthday, anniversary, death date, memorial, tribute, or other "
