@@ -1111,7 +1111,7 @@ SOURCE ANSWER:
                 "or claim that facts were verified online. If multiple movies could match, say which "
                 "match seems most likely and briefly note the uncertainty. Mark only individual "
                 "unknown details as 'Not sure from offline knowledge'; never invent precise credits, "
-                "financial figures, or plot points. Keep the overview concise and spoiler-light.\\n"
+                "financial figures, or plot points. Keep the overview concise and spoiler-light.\n"
                 f"Runtime reported by VLC for this local video file: {actual_runtime}. "
                 "This is the file's playback duration, not necessarily the official theatrical cut runtime."
             )
