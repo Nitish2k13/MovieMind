@@ -172,7 +172,8 @@ class MovieMindPlayer:
         self.mode_var = tk.StringVar(value="Ask a question")
         self.mode_menu = tk.OptionMenu(
             companion, self.mode_var,
-            "Ask a question", "Explain scene", "Explain dialogue", "Explain a word"
+            "Movie overview", "Ask a question", "Explain scene", "Explain dialogue", "Explain a word",
+            command=self._mode_changed,
         )
         self.mode_menu.config(
             bg="#252a36", fg=TEXT, activebackground="#343b4b",
@@ -204,18 +205,21 @@ class MovieMindPlayer:
             wraplength=250, justify="left", font=("Segoe UI", 9)
         )
         self.context_label.pack(anchor="w", padx=14, pady=(0, 12))
-        tk.Label(
-            companion, text="ASK ABOUT THIS MOVIE", bg=PANEL, fg=TEXT,
+        self.input_frame = tk.Frame(companion, bg=PANEL)
+        self.input_label = tk.Label(
+            self.input_frame, text="ASK ABOUT THIS MOVIE", bg=PANEL, fg=TEXT,
             font=("Segoe UI", 10, "bold")
-        ).pack(anchor="w", padx=14, pady=(4, 6))
+        )
+        self.input_label.pack(anchor="w", pady=(4, 6))
         self.question_var = tk.StringVar(value="")
         self.question_entry = tk.Entry(
-            companion, textvariable=self.question_var, bg="#252a36", fg=TEXT,
+            self.input_frame, textvariable=self.question_var, bg="#252a36", fg=TEXT,
             insertbackground=TEXT, relief="flat", font=("Segoe UI", 10)
         )
-        self.question_entry.pack(fill="x", padx=14, pady=(0, 6), ipady=6)
+        self.question_entry.pack(fill="x", pady=(0, 6), ipady=6)
         self.question_entry.bind("<Return>", self._submit_question)
         self.question_entry.bind("<KeyPress>", self._question_typing_started, add="+")
+        self.input_frame.pack(fill="x", padx=14)
         self.title_entry.bind("<KeyPress>", self._question_typing_started, add="+")
         self.ask_button = self._button(companion, "Ask MovieMind", self.ask_movie)
         self.ask_button.pack(anchor="w", padx=14, pady=(0, 8))
@@ -819,6 +823,47 @@ class MovieMindPlayer:
         except tk.TclError:
             pass
 
+    def _mode_changed(self, mode: str) -> None:
+        """Show a text box only for modes that need user-provided text."""
+        needs_input = mode in ("Ask a question", "Explain a word")
+        if needs_input:
+            if not self.input_frame.winfo_manager():
+                self.input_frame.pack(fill="x", padx=14, before=self.ask_button)
+            self.input_label.config(
+                text="ASK ABOUT THIS MOVIE" if mode == "Ask a question" else "WORD OR PHRASE"
+            )
+            self.question_entry.config(
+                state="normal",
+            )
+            if mode == "Ask a question":
+                self.question_entry.config()
+                self.question_entry.delete(0, "end")
+                self.question_entry.insert(0, "")
+        else:
+            self.input_frame.pack_forget()
+
+        button_labels = {
+            "Movie overview": "Get Movie Overview",
+            "Ask a question": "Ask MovieMind",
+            "Explain scene": "Explain Current Scene",
+            "Explain dialogue": "Explain Current Dialogue",
+            "Explain a word": "Explain Word",
+        }
+        self.ask_button.config(text=button_labels.get(mode, "Ask MovieMind"))
+        if mode == "Movie overview":
+            self.answer_label.config(
+                text="Get an offline overview with runtime, director, cast, and synopsis.",
+                fg=MUTED,
+            )
+        elif mode == "Explain scene":
+            self.answer_label.config(text="MovieMind will describe the current frame locally.", fg=MUTED)
+        elif mode == "Explain dialogue":
+            self.answer_label.config(text="MovieMind will explain the current subtitle/dialogue locally.", fg=MUTED)
+        elif mode == "Explain a word":
+            self.answer_label.config(text="Enter a word or phrase from the movie.", fg=MUTED)
+        else:
+            self.answer_label.config(text="Ask a general question about the movie. No web search is used.", fg=MUTED)
+
     def _current_subtitle(self, current_ms: int) -> str:
         """Return subtitle text active at the current playback position, if any."""
         active = [
@@ -946,7 +991,30 @@ SOURCE ANSWER:
             for item in self.recent_qa_memory[-5:]
         ) or "No earlier MovieMind conversation in this session."
 
-        if mode == "Explain scene":
+        if mode == "Movie overview":
+            try:
+                media_length_ms = self.player.get_length() if self.player else -1
+            except Exception:
+                media_length_ms = -1
+            if media_length_ms is None or media_length_ms <= 0:
+                media_length_ms = self.duration_ms
+            actual_runtime = (
+                self._format_time(int(media_length_ms))
+                if media_length_ms and media_length_ms > 0
+                else "Unavailable from the media player"
+            )
+            task = (
+                "Give a useful movie overview with these headings: Runtime, Director, Main Cast, "
+                "Overview, Genre. Use the supplied local file runtime as authoritative. For "
+                "director, cast, genre, and plot, use only reliable knowledge already available "
+                "in your local model; do not browse, call an API, or claim that you verified facts "
+                "online. If you are unsure about a detail, write 'Not confidently known offline' "
+                "instead of guessing. Keep the overview spoiler-light and concise.\n"
+                f"Runtime reported by VLC for this local video file: {actual_runtime}. "
+                "This is the file's playback duration, not necessarily the official theatrical cut runtime."
+            )
+            question_for_memory = "Movie overview"
+        elif mode == "Explain scene":
             task = (
                 "Explain the CURRENT visible scene in 4-6 useful sentences. Describe only "
                 "details supported by the attached frame. Explain the apparent interaction "
@@ -973,10 +1041,11 @@ SOURCE ANSWER:
             question_for_memory = user_input
         else:
             task = (
-                f"Answer this question directly: {user_input}\n"
-                "Give 4-6 useful sentences when the question needs context. Answer general "
-                "movie/world knowledge when appropriate, then connect it to this scene only "
-                "when the provided evidence supports that connection."
+                f"Answer this question about the movie generally: {user_input}\n"
+                "Answer from general movie knowledge available in the local model. Do not assume "
+                "the user is asking about the current scene, subtitle, or dialogue unless they "
+                "explicitly say so. Do not browse or call any online service. If the requested "
+                "movie fact is uncertain, state that briefly rather than inventing a specific fact."
             )
             question_for_memory = user_input
 
@@ -997,12 +1066,14 @@ TIMESTAMPED SUBTITLE CONTEXT:
 RECENT CONVERSATION MEMORY (may contain previous model mistakes; treat as clues, not proof):
 {memory}
 
-EVIDENCE RULES:
-- If an image is attached, it is the primary evidence for what is visibly happening now.
-- Current subtitle and nearby timestamped dialogue are supporting evidence.
+OFFLINE AND EVIDENCE RULES:
+- All normal assistant modes must work locally through Ollama; never browse, call web APIs, or access the network.
+- If an image is attached, it is primary evidence for what is visibly happening in the current frame.
+- Current subtitle and nearby timestamped dialogue are supporting evidence for scene/dialogue modes.
+- For Movie overview and Ask a question, answer about the movie generally; do not force the answer to be about the current scene.
 - Recent conversation memory helps with continuity but is not proof of a fact.
-- Never invent character identities, relationships, actions, motivations, or plot events.
-- Do not claim to see the screenshot if it was not attached or is not readable.
+- Never invent character identities, relationships, actions, motivations, movie credits, or plot events.
+- Do not claim to see a screenshot if it was not attached or is not readable.
 - Distinguish direct evidence from interpretation; state uncertainty briefly when needed.
 - Do not treat a subtitle as proof of who is speaking unless the evidence supports it.
 - Do not expose hidden reasoning or repeat the user's question.
@@ -1017,7 +1088,9 @@ Return only the answer, with no meta commentary.
             import tempfile
             import uuid
             snapshot_path = str(Path(tempfile.gettempdir()) / f"moviemind_frame_{uuid.uuid4().hex}.png")
-            if self.player and self.current_path:
+            if mode in ("Movie overview", "Ask a question"):
+                snapshot_path = None
+            elif self.player and self.current_path:
                 self.player.video_take_snapshot(0, snapshot_path, 0, 0)
             else:
                 snapshot_path = None
