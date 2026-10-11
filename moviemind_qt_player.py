@@ -511,17 +511,17 @@ class MovieMindQtPlayer(QMainWindow):
     def _trim_movie_title(path: str) -> str:
         """Turn noisy release filenames into a readable movie title."""
         title = Path(path).stem
-        title = re.sub(r"^@?MovieBox[_ .-]*Studios?\\s*", "", title, flags=re.I)
-        title = re.sub(r"^@[A-Za-z0-9_.-]+\\s+", "", title)
+        title = re.sub(r"^@?MovieBox[_ .-]*Studios?\s*", "", title, flags=re.I)
+        title = re.sub(r"^@[A-Za-z0-9_.-]+\s+", "", title)
         title = re.sub(
-            r"(?i)\\s+(?:blu[ .-]?ray|web[ .-]?dl|web[ .-]?rip|hdrip|brrip|"
+            r"(?i)\s+(?:blu[ .-]?ray|web[ .-]?dl|web[ .-]?rip|hdrip|brrip|"
             r"dvdrip|x264|x265|hevc|1080p|720p|2160p|4k|proper|extended|"
-            r"remux|h\\.?264|h\\.?265)\\b.*$",
+            r"remux|h\.?264|h\.?265)\b.*$",
             "", title,
         )
-        title = re.sub(r"\\s*[-_.]+\\s*(?:mkv|mp4|avi)$", "", title, flags=re.I)
+        title = re.sub(r"\s*[-_.]+\s*(?:mkv|mp4|avi)$", "", title, flags=re.I)
         title = re.sub(r"[._]+", " ", title)
-        return re.sub(r"\\s+", " ", title).strip(" -_.") or Path(path).stem
+        return re.sub(r"\s+", " ", title).strip(" -_.") or Path(path).stem
 
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
