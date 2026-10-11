@@ -446,12 +446,16 @@ class MovieMindQtPlayer(QMainWindow):
             button.setProperty("selected", selected == mode)
             button.style().unpolish(button)
             button.style().polish(button)
-        needs_input = mode == "Ask a question"
+        needs_input = mode in ("Ask a question", "Explain a word")
         self.ai_input.setVisible(needs_input)
         self.ai_submit.setVisible(needs_input)
         if mode == "Ask a question":
             self.ai_input.setPlaceholderText("Ask a question about this movie…")
             self.ai_submit.setText("Ask MovieMind")
+            self.ai_input.setFocus()
+        elif mode == "Explain a word":
+            self.ai_input.setPlaceholderText("Enter a word or phrase…")
+            self.ai_submit.setText("Explain word")
             self.ai_input.setFocus()
         elif mode == "Easter eggs / Hidden details":
             self._start_online_research()
