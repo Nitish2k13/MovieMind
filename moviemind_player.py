@@ -68,7 +68,15 @@ class MovieMindPlayer:
 
         if vlc is not None:
             try:
-                self.instance = vlc.Instance("--no-video-title-show")
+                # Prefer the Windows multimedia audio output explicitly and
+                # disable D3D11 hardware decoding for stability on this prototype.
+                # The previous default produced audio-output failures and timestamp
+                # errors on the user's Intel Iris Xe setup.
+                self.instance = vlc.Instance(
+                    "--no-video-title-show",
+                    "--aout=mmdevice",
+                    "--avcodec-hw=none",
+                )
                 self.player = self.instance.media_player_new()
             except Exception as exc:
                 messagebox.showerror(
@@ -305,11 +313,22 @@ class MovieMindPlayer:
             self._show_missing_binding()
             return
         try:
-            if self.player.is_playing():
-                self.player.pause()
+            state = self.player.get_state()
+            if state == vlc.State.Playing:
+                self.player.set_pause(1)
                 self.status_label.config(text="PAUSED", fg="#fcd34d")
+            elif self.current_path and state in (
+                vlc.State.Paused, vlc.State.Opening, vlc.State.Buffering,
+                vlc.State.Stopped, vlc.State.Ended
+            ):
+                if state == vlc.State.Paused:
+                    self.player.set_pause(0)
+                elif state in (vlc.State.Stopped, vlc.State.Ended):
+                    self.player.play()
+                # Opening/Buffering means play is already in progress; don't call
+                # play() again and accidentally reset the media.
+                self.status_label.config(text="PLAYING", fg="#86efac")
             elif self.current_path:
-                # VLC's pause() toggles state; play() resumes a paused player.
                 self.player.play()
                 self.status_label.config(text="PLAYING", fg="#86efac")
             else:
@@ -1103,7 +1122,9 @@ class MovieMindPlayer:
                 pass
 
     def _start_key_poll(self) -> None:
-        self._key_poll_id = self.root.after(60, self._poll_media_keys)
+        # Poll faster than the old 60 ms interval so short Space presses aren't
+        # missed while the native VLC child window owns keyboard focus.
+        self._key_poll_id = self.root.after(10, self._poll_media_keys)
 
     def _poll_media_keys(self) -> None:
         self._key_poll_id = None
@@ -1157,7 +1178,7 @@ class MovieMindPlayer:
         except Exception:
             pass
         if not getattr(self, "_closing", False):
-            self._key_poll_id = self.root.after(60, self._poll_media_keys)
+            self._key_poll_id = self.root.after(10, self._poll_media_keys)
 
     def _escape_fullscreen(self, _event=None) -> None:
         if self.fullscreen:
