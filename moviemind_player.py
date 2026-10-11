@@ -49,6 +49,8 @@ class MovieMindPlayer:
         self.subtitle_context: list[dict[str, object]] = []
         # Lightweight conversational memory: only recent, user-requested AI answers.
         self.recent_qa_memory: list[dict[str, str]] = []
+        self.easter_egg_history: list[dict[str, str]] = []
+        self._source_url_by_tag: dict[str, str] = {}
         self.reply_language = "English"
         self.last_answer_source = ""
         self.last_answer_source_language = "English"
@@ -1245,6 +1247,61 @@ Return only the answer, with no meta commentary.
             daemon=True,
         ).start()
 
+    def _render_easter_egg_history(self) -> None:
+        """Render the current session's Easter egg discoveries with colored statuses and clickable sources."""
+        import re
+        widget = self.answer_label
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        self._source_url_by_tag.clear()
+        widget.tag_configure("confirmed", foreground="#4ade80", font=("Segoe UI", 10, "bold"))
+        widget.tag_configure("possible", foreground="#facc15", font=("Segoe UI", 10, "bold"))
+        widget.tag_configure("unverified", foreground="#f87171", font=("Segoe UI", 10, "bold"))
+        widget.tag_configure("history_heading", foreground="#c4b5fd", font=("Segoe UI", 11, "bold"))
+        widget.tag_configure("source", foreground="#60a5fa", underline=True)
+        widget.tag_bind("source", "<Button-1>", self._open_easter_egg_source)
+        widget.tag_bind("source", "<Enter>", lambda _event: widget.config(cursor="hand2"))
+        widget.tag_bind("source", "<Leave>", lambda _event: widget.config(cursor="xterm"))
+
+        for index, item in enumerate(reversed(self.easter_egg_history), start=1):
+            if index > 1:
+                widget.insert("end", "\n" + "─" * 28 + "\n")
+            heading = f"Discovery {len(self.easter_egg_history) - index + 1} · {item['movie']} · {item['time']}\n"
+            widget.insert("end", heading, ("history_heading",))
+            text_value = item["result"]
+            cursor = 0
+            for match in re.finditer(r"https?://[^\s\]\)>,]+", text_value):
+                widget.insert("end", text_value[cursor:match.start()])
+                url = match.group(0).rstrip(".")
+                tag = f"source_{len(self._source_url_by_tag)}"
+                self._source_url_by_tag[tag] = url
+                widget.insert("end", url, ("source", tag))
+                cursor = match.start() + len(url)
+            widget.insert("end", text_value[cursor:] + "\n")
+        # Color status labels without changing the surrounding response text.
+        full_text = widget.get("1.0", "end-1c")
+        for match in re.finditer(r"(?i)status\s*:\s*(confirmed|possible|not verified|unverified)", full_text):
+            status = match.group(1).lower()
+            tag = "confirmed" if status == "confirmed" else "possible" if status == "possible" else "unverified"
+            start = f"1.0+{match.start(1)}c"
+            end = f"1.0+{match.end(1)}c"
+            widget.tag_add(tag, start, end)
+        widget.configure(state="disabled")
+        widget.yview_moveto(0)
+
+    def _open_easter_egg_source(self, event=None) -> None:
+        import webbrowser
+        widget = self.answer_label
+        index = widget.index(f"@{event.x},{event.y}") if event else "insert"
+        tags = widget.tag_names(index)
+        for tag in tags:
+            if tag in self._source_url_by_tag:
+                try:
+                    webbrowser.open(self._source_url_by_tag[tag])
+                except Exception:
+                    pass
+                return
+
     def _run_easter_egg_research(self, snapshot_path: str, movie_title: str, language: str) -> None:
         import base64
         import json
@@ -1303,26 +1360,36 @@ Return only the answer, with no meta commentary.
                 clues = json.loads(response.read().decode("utf-8")).get("response", "").strip()
             if not clues:
                 clues = "No distinctive clue could be identified confidently from this frame."
-            query = urllib.parse.quote(f'"{movie_title}" visual Easter eggs props symbols ' + " ".join(clues.split()[:18]))
-            search_url = "https://html.duckduckgo.com/html/?q=" + query
-            search_req = urllib.request.Request(
-                search_url, headers={"User-Agent": "Mozilla/5.0 (compatible; MovieMind/1.0)"},
-            )
-            try:
-                with urllib.request.urlopen(search_req, timeout=10) as response:
-                    html = response.read().decode("utf-8", errors="replace")
-                blocks = re.findall(
-                    r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?'
-                    r'<(?:a|div)[^>]+class="result__snippet"[^>]*>(.*?)</(?:a|div)>',
-                    html, flags=re.I | re.S,
+            # Search each candidate independently with the movie title, so evidence can be tied
+            # to a specific clue rather than diluted by one giant combined query.
+            clue_lines = [line.strip(" -•0123456789.\\t") for line in clues.splitlines() if line.strip()]
+            clue_lines = [line for line in clue_lines if len(line) > 8][:3]
+            if not clue_lines:
+                clue_lines = [clues[:180]]
+            snippets = []
+            for clue in clue_lines:
+                search_phrase = f'"{movie_title}" "{clue}" Easter egg explanation'
+                search_url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(search_phrase)
+                search_req = urllib.request.Request(
+                    search_url, headers={"User-Agent": "Mozilla/5.0 (compatible; MovieMind/1.0)"},
                 )
-                snippets = []
-                for url, title_html, snippet_html in blocks[:6]:
-                    clean = lambda value: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
-                    snippets.append(f"Title: {clean(title_html)}\nURL: {url}\nSnippet: {clean(snippet_html)}")
-                web_evidence = "\n\n".join(snippets) or "No usable web results were returned by the search provider."
-            except Exception as exc:
-                web_evidence = f"Online search could not be completed: {type(exc).__name__}: {exc}"
+                try:
+                    with urllib.request.urlopen(search_req, timeout=10) as response:
+                        html = response.read().decode("utf-8", errors="replace")
+                    blocks = re.findall(
+                        r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?'
+                        r'<(?:a|div)[^>]+class="result__snippet"[^>]*>(.*?)</(?:a|div)>',
+                        html, flags=re.I | re.S,
+                    )
+                    clean = lambda value: re.sub(r"\\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
+                    for url, title_html, snippet_html in blocks[:3]:
+                        snippets.append(
+                            f"QUERY CLUE: {clue}\nTitle: {clean(title_html)}\nURL: {url}\n"
+                            f"Snippet: {clean(snippet_html)}"
+                        )
+                except Exception as exc:
+                    snippets.append(f"QUERY CLUE: {clue}\nSearch error: {type(exc).__name__}: {exc}")
+            web_evidence = "\n\n".join(snippets) or "No usable web results were returned by the search provider."
             synthesis_prompt = (
                 f"You are MovieMind's careful Easter-egg researcher. Reply in {language}. Movie: {movie_title}.\n"
                 f"VISIBLE CLUE CANDIDATES (the vision model can be wrong):\n{clues}\n\n"
@@ -1369,7 +1436,13 @@ Return only the answer, with no meta commentary.
                 self.answer_label.config(text=error, fg="#fca5a5")
                 self.status_label.config(text="EASTER EGG RESEARCH FAILED", fg="#fca5a5")
             else:
-                self.answer_label.config(text=result or "No result returned.", fg=TEXT)
+                current_result = result or "No result returned."
+                self.easter_egg_history.append({
+                    "movie": movie_title,
+                    "time": time.strftime("%H:%M:%S"),
+                    "result": current_result,
+                })
+                self._render_easter_egg_history()
                 self.status_label.config(text="ONLINE EASTER EGG RESEARCH COMPLETE", fg="#86efac")
         try:
             self.root.after(0, finish)
