@@ -252,7 +252,6 @@ class MovieMindQtPlayer(QMainWindow):
             "padding:8px 13px; font-size:12px; font-weight:700; }"
         )
         self.fullscreen_title.hide()
-        self.deck.hide()
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidepanel")
         self.sidebar.setFixedWidth(300)
