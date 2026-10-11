@@ -309,33 +309,64 @@ class MovieMindQtPlayer(QMainWindow):
         line.setStyleSheet("color:#1b3552;")
         side.addWidget(line)
         side.addWidget(QLabel("ASSISTANT MODES"))
-        for name, detail in [
-            ("◉  Explain scene", "Understand what is happening"),
-            ("❝  Explain dialogue", "Unpack the line and subtext"),
-            ("⌕  Hidden details", "Research possible Easter eggs"),
-            ("✳  Ask a question", "Ask about the movie"),
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems([
+            "Movie overview", "Ask a question", "Explain scene",
+            "Explain dialogue", "Explain a word", "Easter eggs / Hidden details",
+        ])
+        self.mode_combo.setCurrentText("Ask a question")
+        self.mode_combo.currentTextChanged.connect(self._mode_changed)
+        side.addWidget(self.mode_combo)
+
+        language_row = QHBoxLayout()
+        language_row.addWidget(QLabel("REPLY LANGUAGE"))
+        self.language_combo = QComboBox()
+        self.language_combo.addItems(["English", "Tamil", "Tanglish"])
+        self.language_combo.currentTextChanged.connect(self._language_changed)
+        language_row.addWidget(self.language_combo, 1)
+        side.addLayout(language_row)
+
+        self.ai_input = QLineEdit()
+        self.ai_input.setPlaceholderText("Ask about the movie…")
+        self.ai_input.returnPressed.connect(self._submit_ai_input)
+        side.addWidget(self.ai_input)
+
+        self.ai_submit = QPushButton("Ask MovieMind")
+        self.ai_submit.setObjectName("primary")
+        self.ai_submit.clicked.connect(self._submit_ai_input)
+        side.addWidget(self.ai_submit)
+
+        self.answer_area = QTextEdit()
+        self.answer_area.setReadOnly(True)
+        self.answer_area.setPlaceholderText("MovieMind's answer will appear here.")
+        self.answer_area.setMinimumHeight(180)
+        self.answer_area.setStyleSheet(
+            "QTextEdit { background:#081526; color:#eaf3ff; border:1px solid #1b3858; "
+            "border-radius:8px; padding:8px; font-size:12px; }"
+        )
+        side.addWidget(self.answer_area, 1)
+
+        self.mode_buttons = {}
+        for mode, label, detail in [
+            ("Explain scene", "◉  Explain scene", "Analyze the current frame"),
+            ("Explain dialogue", "❝  Explain dialogue", "Explain the current subtitle"),
+            ("Easter eggs / Hidden details", "⌕  Hidden details", "Research possible Easter eggs"),
+            ("Ask a question", "✳  Ask a question", "Ask about the movie"),
         ]:
-            tile = QFrame()
-            tile.setStyleSheet("QFrame {background:#10223a; border:1px solid #1b3858; border-radius:10px;} QFrame:hover {background:#142d4b; border-color:#348be8;}")
-            tile_layout = QVBoxLayout(tile)
-            tile_layout.setContentsMargins(12, 10, 12, 10)
-            name_label = QLabel(name)
-            name_label.setStyleSheet("font-weight:650;")
-            detail_label = QLabel(detail)
-            detail_label.setObjectName("muted")
-            detail_label.setStyleSheet("font-size:11px; color:#8ca7c8;")
-            tile_layout.addWidget(name_label)
-            tile_layout.addWidget(detail_label)
+            tile = QPushButton(label + "\n" + detail)
+            tile.setStyleSheet(
+                "QPushButton { text-align:left; white-space:normal; background:#10223a; "
+                "border:1px solid #1b3858; border-radius:9px; padding:9px; } "
+                "QPushButton:hover { background:#142d4b; border-color:#348be8; }"
+            )
+            tile.clicked.connect(lambda checked=False, selected=mode: self._select_mode(selected))
+            self.mode_buttons[mode] = tile
             side.addWidget(tile)
+
         side.addStretch()
         self.status = QLabel("●  PLAYER READY")
         self.status.setObjectName("status")
         side.addWidget(self.status)
-        note = QLabel("Local AI integration will be migrated after playback and controls are verified.")
-        note.setObjectName("muted")
-        note.setWordWrap(True)
-        note.setStyleSheet("font-size:10px;")
-        side.addWidget(note)
         content.addWidget(self.sidebar)
 
     def _icon_button(self, text: str, tooltip: str, callback) -> QPushButton:
