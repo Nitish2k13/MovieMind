@@ -181,6 +181,9 @@ class MovieMindQtPlayer(QMainWindow):
         deck = QFrame()
         self.deck = deck
         deck.setObjectName("controlDeck")
+        deck.setAttribute(Qt.WA_StyledBackground, True)
+        deck.setAutoFillBackground(True)
+        deck.setMouseTracking(True)
         deck_layout = QVBoxLayout(deck)
         deck_layout.setContentsMargins(18, 14, 18, 16)
         deck_layout.setSpacing(12)
@@ -246,8 +249,14 @@ class MovieMindQtPlayer(QMainWindow):
         self.fullscreen_overlay = QWidget(
             self, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
         )
-        self.fullscreen_overlay.setAttribute(Qt.WA_TranslucentBackground, True)
+        # Keep the overlay as a real native top-level window. VLC uses a native
+        # video HWND on Windows; without a native, topmost Qt window, the video
+        # surface can win the stacking order and eat clicks on the controls.
+        self.fullscreen_overlay.setAttribute(Qt.WA_NativeWindow, True)
+        self.fullscreen_overlay.setAttribute(Qt.WA_StyledBackground, True)
         self.fullscreen_overlay.setStyleSheet("background: transparent;")
+        self.fullscreen_overlay.setMouseTracking(True)
+        self.fullscreen_overlay.installEventFilter(self)
         self.fullscreen_title = QLabel("", self.fullscreen_overlay)
         self.fullscreen_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.fullscreen_title.setStyleSheet(
@@ -569,10 +578,10 @@ class MovieMindQtPlayer(QMainWindow):
             self.fullscreen_title.setText(self.title_value.text())
             self.fullscreen_title.show() if self.current_path else self.fullscreen_title.hide()
             self.showFullScreen()
-            self.fullscreen_overlay.setGeometry(self.geometry())
             self.fullscreen_overlay.show()
-            self.fullscreen_overlay.raise_()
             self._position_fullscreen_overlay()
+            self.fullscreen_overlay.raise_()
+            self.fullscreen_overlay.activateWindow()
             self.deck.hide()
             self.video_surface.setFocus()
         self.update()
@@ -634,9 +643,12 @@ class MovieMindQtPlayer(QMainWindow):
         if not self.fullscreen_overlay.isVisible():
             self.fullscreen_overlay.show()
             self._position_fullscreen_overlay()
-            self.fullscreen_overlay.raise_()
+        # Raise the actual top-level window and then the opaque control panel.
+        # Do this on reveal only, not on every mouse-move event.
+        self.fullscreen_overlay.raise_()
         if not self.deck.isVisible():
             self.deck.show()
+        self.deck.raise_()
         cursor = self.fullscreen_overlay.mapFromGlobal(QCursor.pos())
         if self.deck.geometry().contains(cursor):
             self._fullscreen_controls_timer.stop()
@@ -654,10 +666,19 @@ class MovieMindQtPlayer(QMainWindow):
             self.deck.hide()
 
     def eventFilter(self, watched, event):
-        if event.type() == QEvent.Type.MouseMove and self.isFullScreen():
-            local_pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-            if local_pos.y() >= self.height() - 170:
+        if self.isFullScreen() and event.type() in (QEvent.Type.MouseMove, QEvent.Type.Enter):
+            if event.type() == QEvent.Type.Enter:
                 self._show_fullscreen_controls()
+            else:
+                local_pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                # Events from the fullscreen overlay use overlay-local coordinates;
+                # events from the main window use main-window coordinates.
+                if watched is self.fullscreen_overlay:
+                    y = local_pos.y()
+                else:
+                    y = self.mapFromGlobal(QCursor.pos()).y()
+                if y >= self.height() - 170:
+                    self._show_fullscreen_controls()
         return super().eventFilter(watched, event)
 
     def keyPressEvent(self, event) -> None:
