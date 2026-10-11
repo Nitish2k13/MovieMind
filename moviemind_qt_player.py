@@ -75,6 +75,8 @@ class MovieMindQtPlayer(QMainWindow):
         self.current_path: str | None = None
         self.duration_ms = 0
         self.dragging_seek = False
+        self._pending_seek_ms: int | None = None
+        self._pending_seek_checks = 0
         self._fullscreen_controls_timer = QTimer(self)
         self._fullscreen_controls_timer.setSingleShot(True)
         self._fullscreen_controls_timer.setInterval(2200)
@@ -242,7 +244,6 @@ class MovieMindQtPlayer(QMainWindow):
             self, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
         )
         self.fullscreen_overlay.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.fullscreen_overlay.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.fullscreen_overlay.setStyleSheet("background: transparent;")
         self.fullscreen_title = QLabel("", self.fullscreen_overlay)
         self.fullscreen_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -401,11 +402,21 @@ class MovieMindQtPlayer(QMainWindow):
             if duration > 0:
                 self.duration_ms = duration
                 self.total_time.setText(clock(duration))
+                if self._pending_seek_ms is not None:
+                    # LibVLC applies seeks asynchronously. Keep the requested thumb
+                    # position until the playback clock catches up, otherwise the
+                    # 250 ms refresh loop snaps the slider back to the old position.
+                    if abs(position - self._pending_seek_ms) <= 2500 or self._pending_seek_checks <= 0:
+                        self._pending_seek_ms = None
+                    else:
+                        self._pending_seek_checks -= 1
                 if not self.dragging_seek:
+                    shown_position = self._pending_seek_ms if self._pending_seek_ms is not None else position
                     self.seek.blockSignals(True)
-                    self.seek.setValue(round(position / duration * 1000))
+                    self.seek.setValue(round(shown_position / duration * 1000))
                     self.seek.blockSignals(False)
-            self.current_time.setText(clock(position))
+            shown_time = self._pending_seek_ms if self._pending_seek_ms is not None else position
+            self.current_time.setText(clock(shown_time))
             state = self.player.get_state()
             if state == vlc.State.Playing:
                 self.play_button.setText("Ⅱ")
@@ -424,9 +435,16 @@ class MovieMindQtPlayer(QMainWindow):
             self.current_time.setText(clock(int(self.duration_ms * value / 1000)))
 
     def _seek_end(self) -> None:
+        target = int(self.duration_ms * self.seek.value() / 1000)
         self.dragging_seek = False
         if self.player and self.duration_ms:
-            self.player.set_time(int(self.duration_ms * self.seek.value() / 1000))
+            self._pending_seek_ms = target
+            self._pending_seek_checks = 12  # up to ~3 seconds for slow keyframes/seeks
+            self.current_time.setText(clock(target))
+            result = self.player.set_time(target)
+            if result == -1:
+                # VLC may reject time-based seeking for some media; try position seeking.
+                self.player.set_position(min(1.0, max(0.0, target / self.duration_ms)))
 
     def _set_volume(self, value: int) -> None:
         self.volume_value.setText(f"{value}%")
@@ -457,7 +475,12 @@ class MovieMindQtPlayer(QMainWindow):
                 action.triggered.connect(lambda checked=False, tid=int(track_id): setter(tid))
         except Exception as exc:
             menu.addAction(f"Could not read tracks: {exc}").setEnabled(False)
+        # Do not let the auto-hide timer hide the parent deck while the track
+        # menu is open; on some Windows/VLC combinations this interrupts clicks.
+        self._fullscreen_controls_timer.stop()
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+        if self.isFullScreen():
+            self._fullscreen_controls_timer.start()
 
     def show_audio_menu(self) -> None:
         self._track_menu(self.audio_button, "audio")
@@ -555,6 +578,8 @@ class MovieMindQtPlayer(QMainWindow):
     def _show_fullscreen_controls(self) -> None:
         if not self.isFullScreen():
             return
+        self.fullscreen_overlay.show()
+        self._position_fullscreen_overlay()
         self.deck.show()
         self.deck.raise_()
         self._fullscreen_controls_timer.start()
