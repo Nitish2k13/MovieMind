@@ -1003,7 +1003,7 @@ class MovieMindPlayer:
             self.root.after_idle(self._position_fullscreen_overlay)
 
     def _fullscreen_mouse_motion(self, event=None) -> None:
-        if self.fullscreen:
+        if self.fullscreen and self._is_app_foreground():
             self._show_fullscreen_overlay()
 
     def _start_fullscreen_poll(self) -> None:
@@ -1014,25 +1014,45 @@ class MovieMindPlayer:
                 pass
         self._fullscreen_poll_id = self.root.after(100, self._poll_fullscreen_cursor)
 
+    def _is_app_foreground(self) -> bool:
+        """Return True only while a window owned by MovieMind is foreground."""
+        if not sys.platform.startswith("win"):
+            return self.root.focus_displayof() is not None
+        try:
+            import ctypes
+            foreground = ctypes.windll.user32.GetForegroundWindow()
+            if not foreground:
+                return False
+            foreground_pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(
+                foreground, ctypes.byref(foreground_pid)
+            )
+            return foreground_pid.value == os.getpid()
+        except Exception:
+            return False
+
     def _poll_fullscreen_cursor(self) -> None:
         self._fullscreen_poll_id = None
         if not self.fullscreen:
             return
         try:
-            import ctypes
-            from ctypes import wintypes
-            point = wintypes.POINT()
-            if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
-                x, y = point.x, point.y
-                left = self.root.winfo_rootx()
-                top = self.root.winfo_rooty()
-                right = left + self.root.winfo_width()
-                bottom = top + self.root.winfo_height()
-                # Reveal controls when cursor reaches the bottom control zone.
-                if left <= x <= right and bottom - 180 <= y <= bottom:
-                    self._show_fullscreen_overlay()
-                elif self._fullscreen_overlay is not None:
-                    self._hide_fullscreen_overlay()
+            # Never raise a topmost overlay while another app is active.
+            if not self._is_app_foreground():
+                self._hide_fullscreen_overlay()
+            else:
+                import ctypes
+                from ctypes import wintypes
+                point = wintypes.POINT()
+                if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+                    x, y = point.x, point.y
+                    left = self.root.winfo_rootx()
+                    right = left + self.root.winfo_width()
+                    bottom = self.root.winfo_rooty() + self.root.winfo_height()
+                    # Reveal controls only over MovieMind's own fullscreen window.
+                    if left <= x <= right and bottom - 180 <= y <= bottom:
+                        self._show_fullscreen_overlay()
+                    elif self._fullscreen_overlay is not None:
+                        self._hide_fullscreen_overlay()
         except Exception:
             pass
         if self.fullscreen:
@@ -1189,11 +1209,11 @@ class MovieMindPlayer:
         return bool(focused and focused.winfo_class() in ("Entry", "Text", "TEntry"))
 
     def _space_shortcut(self, event=None) -> str:
-        # The Windows key poll is authoritative for VLC's native child window.
-        # Tk's event path must not double-toggle playback.
+        # Windows key polling handles Space even when VLC's native video HWND
+        # owns focus. Do not toggle here as well, or one press can pause then
+        # immediately resume. Let Space through when the user is typing.
         if self._is_text_entry_focused() and not self._keyboard_media_mode:
             return None
-        self.toggle_play()
         return "break"
 
     def _shortcut_open(self, _event=None) -> str:
