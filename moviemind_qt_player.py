@@ -248,6 +248,9 @@ class MovieMindQtPlayer(QMainWindow):
         self.subtitle_button = QPushButton("CC  Subtitles")
         self.subtitle_button.clicked.connect(self.show_subtitle_menu)
         controls.addWidget(self.subtitle_button)
+        self.load_subtitle_button = QPushButton("Load SRT")
+        self.load_subtitle_button.clicked.connect(self.open_subtitle)
+        controls.addWidget(self.load_subtitle_button)
         controls.addStretch()
         controls.addWidget(QLabel("VOL"))
         self.volume = QSlider(Qt.Horizontal)
@@ -370,9 +373,10 @@ class MovieMindQtPlayer(QMainWindow):
         content.addWidget(self.sidebar)
 
     def _select_mode(self, mode: str) -> None:
-        self.mode_combo.setCurrentText(mode)
-        if mode in ("Movie overview", "Explain scene", "Explain dialogue"):
+        if self.mode_combo.currentText() == mode:
             self._ask_ai()
+        else:
+            self.mode_combo.setCurrentText(mode)
 
     def _mode_changed(self, mode: str) -> None:
         needs_input = mode in ("Ask a question", "Explain a word")
@@ -398,6 +402,33 @@ class MovieMindQtPlayer(QMainWindow):
             self.answer_area.setPlainText("Explaining the current subtitle locally…")
         elif mode == "Movie overview":
             self.answer_area.setPlainText("Preparing the offline movie overview…")
+        if mode in ("Movie overview", "Explain scene", "Explain dialogue"):
+            QTimer.singleShot(0, self._ask_ai)
+
+    def open_subtitle(self) -> None:
+        if not self.player or not self.current_path:
+            QMessageBox.information(self, "Subtitles", "Open a movie first.")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load subtitle file", str(Path(self.current_path).parent),
+            "Subtitle files (*.srt *.ass *.ssa *.vtt *.sub);;All files (*.*)"
+        )
+        if not path:
+            return
+        try:
+            result = self.player.video_set_subtitle_file(path)
+            if result == -1:
+                QMessageBox.warning(self, "Subtitle loading", "VLC did not accept this subtitle file.")
+                return
+            self.subtitle_context = self._parse_subtitle_file(path)
+            self._set_status(f"SUBTITLES LOADED · {len(self.subtitle_context)} TIMED LINES")
+            if not self.subtitle_context:
+                self.answer_area.setPlainText(
+                    "Subtitles were passed to VLC, but no timestamped SRT/VTT context could be parsed. "
+                    "Dialogue explanations may have limited context for this file format."
+                )
+        except Exception as exc:
+            QMessageBox.critical(self, "Subtitle error", str(exc))
 
     def _language_changed(self, language: str) -> None:
         self.reply_language = language
@@ -738,6 +769,11 @@ Return only the answer, with no meta commentary.
                 raise RuntimeError("VLC could not start playback.")
             self.current_path = path
             clean_title = self._trim_movie_title(path)
+            self.movie_title = clean_title
+            self.subtitle_context.clear()
+            self.recent_qa_memory.clear()
+            self.ai_input.clear()
+            self.answer_area.setPlainText("New movie session started. Ask about the current scene or dialogue.")
             self.title_value.setText(clean_title)
             self.movie_name.setText(clean_title.upper()[:48])
             self.fullscreen_title.setText(clean_title)
@@ -1101,6 +1137,13 @@ Return only the answer, with no meta commentary.
         super().keyPressEvent(event)
 
     def closeEvent(self, event) -> None:
+        for snapshot_path in tuple(self._pending_snapshot_paths):
+            try:
+                if os.path.exists(snapshot_path):
+                    os.remove(snapshot_path)
+            except OSError:
+                pass
+        self._pending_snapshot_paths.clear()
         try:
             if hasattr(self, "timer"):
                 self.timer.stop()
