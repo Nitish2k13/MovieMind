@@ -1026,21 +1026,21 @@ Return only the answer, with no meta commentary.
                     search_clue = clue
                 # Build a clean Google Images query focused on the clue itself,
                 # not the movie title. Examples: "AT&T logo on the phone" -> "AT&T".
-                image_search_term = re.sub(r"(?i)^(?:the|a|an)\\s+", "", search_clue).strip()
+                image_search_term = re.sub(r"(?i)^(?:the|a|an)\s+", "", search_clue).strip()
                 image_search_term = re.sub(
-                    r"(?i)\\s+(?:logo|symbol|emblem)\\s+(?:displayed\\s+)?(?:on|in)\\s+(?:the\\s+)?(?:phone|screen|device)$",
+                    r"(?i)\s+(?:logo|symbol|emblem)\s+(?:displayed\s+)?(?:on|in)\s+(?:the\s+)?(?:phone|screen|device)$",
                     "",
                     image_search_term,
                 )
-                image_search_term = re.sub(r"(?i)^contact\\s+name\\s+", "", image_search_term)
+                image_search_term = re.sub(r"(?i)^contact\s+name\s+", "", image_search_term)
                 image_search_term = re.sub(
-                    r"(?i)\\s+(?:displayed|shown|visible)\\s+(?:on|in)\\s+(?:the\\s+)?(?:phone|screen|device)$",
+                    r"(?i)\s+(?:displayed|shown|visible)\s+(?:on|in)\s+(?:the\s+)?(?:phone|screen|device)$",
                     "",
                     image_search_term,
                 ).strip(" .,:;-") or search_clue
                 google_images_url = "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(image_search_term)
                 snippets.append(
-                    f"QUERY CLUE: {clue}\\nGOOGLE IMAGES (visual lookup only, not proof): {google_images_url}"
+                    f"QUERY CLUE: {clue}\nGOOGLE IMAGES (visual lookup only, not proof): {google_images_url}"
                 )
                 search_phrases = [f'"{movie_title}" "{search_clue}" Easter egg explanation']
                 # Numbers may encode a real-world date or tribute. Run a separate, targeted
