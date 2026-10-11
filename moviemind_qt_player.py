@@ -582,7 +582,7 @@ class MovieMindQtPlayer(QMainWindow):
                 media_length_ms = -1
             if media_length_ms is None or media_length_ms <= 0:
                 media_length_ms = self.duration_ms
-            actual_runtime = self._format_time(media_length_ms) if media_length_ms and media_length_ms > 0 else "Unavailable from the media player"
+            actual_runtime = clock(media_length_ms) if media_length_ms and media_length_ms > 0 else "Unavailable from the media player"
             task = (
                 "Create a helpful offline overview of the movie named above using only your pretrained "
                 "knowledge, with these headings: Runtime, Director, Main Cast, Overview, Genre, "
@@ -645,7 +645,7 @@ class MovieMindQtPlayer(QMainWindow):
 {self._language_instruction(language)}
 
 MOVIE: {self.movie_title}
-PLAYBACK TIME: {self._format_time(current_ms)}
+PLAYBACK TIME: {clock(current_ms)}
 USER MODE: {mode}
 
 CURRENT SUBTITLE:
@@ -682,7 +682,7 @@ Return only the answer, with no meta commentary.
                 snapshot_path = None
         request_context = {
             "mode": mode, "question": question_for_memory,
-            "language": language, "time": self._format_time(current_ms),
+            "language": language, "time": clock(current_ms),
         }
         self.ai_request_running = True
         self.ai_submit.setEnabled(False)
