@@ -1099,10 +1099,13 @@ SOURCE ANSWER:
                 "Worldwide Box Office Collection, express values in Indian rupees as ₹ crore (for "
                 "example, ₹250 crore). State that both are approximate reported figures, and clarify "
                 "that worldwide collection means worldwide theatrical box-office gross, not profit. "
-                "Use a rough conversion only when the original figure and conversion are reasonably "
-                "known; do not pretend to have a live exchange rate. If you cannot confidently recall "
-                "a figure, write 'Not reliably available from offline knowledge' instead of guessing. "
-                "Do not confuse budget, domestic collection, worldwide collection, or profit. "
+                "For USD figures, first recall the reported amount in USD and then convert using a fixed "
+                "approximation of ₹83 per US dollar (so USD 1 million is about ₹8.3 crore); this is a "
+                "display conversion, not a live exchange rate. Show financial values in ₹ crore, rounded "
+                "sensibly, and do not multiply or divide by 10 or 100 incorrectly. Only convert when the "
+                "original reported figure is known with reasonable confidence. If the budget or worldwide "
+                "gross is uncertain, write 'Not reliably available from offline knowledge' instead of "
+                "guessing a number. Do not confuse budget, domestic collection, worldwide collection, or profit. "
                 "Use the supplied local file runtime as authoritative for the local file. The movie "
                 "title was extracted from the video filename and may have had release tags removed; "
                 "use the title and year together, if present, to identify the most likely movie. "
@@ -1399,16 +1402,16 @@ Return only the answer, with no meta commentary.
                                 f"Snippet: {clean(snippet_html)}"
                             )
                     else:
-                        fallback_url = "https://www.google.com/search?q=" + urllib.parse.quote(
-                            f'"{movie_title}" "{clue}" Easter egg'
+                        fallback_url = "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(
+                            f"{movie_title} {clue} Easter egg"
                         )
                         snippets.append(
                             f"QUERY CLUE: {clue}\nNo usable direct result links were returned. "
                             f"Use this search link to find current results: {fallback_url}"
                         )
                 except Exception as exc:
-                    fallback_url = "https://www.google.com/search?q=" + urllib.parse.quote(
-                        f'"{movie_title}" "{clue}" Easter egg'
+                    fallback_url = "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(
+                        f"{movie_title} {clue} Easter egg"
                     )
                     snippets.append(
                         f"QUERY CLUE: {clue}\nSearch provider error: {type(exc).__name__}: {exc}\n"
@@ -1431,8 +1434,8 @@ Return only the answer, with no meta commentary.
                 "Use POSSIBLE only when a source provides a plausible but incomplete connection. Never infer a "
                 "Power Stone, Nova Corps, creator intention, or other specific meaning from color/shape alone. "
                 "Do not treat the visual model's guess as evidence. Include source titles and URLs when available. "
-                "If a direct article URL is missing, preserve the provided Google search URL for that exact clue; "
-                "label it 'Search results' rather than presenting it as an article proving the claim. Never invent URLs. "
+                "If a direct article URL is missing, preserve the provided Google Images URL for that clue; "
+                "label it 'Google Images' rather than presenting it as an article proving the claim. Never invent URLs. "
                 "If no distinctive clue has evidence, say that plainly and suggest pausing on a clearer frame. "
                 "Keep the answer concise and stop after the third finding."
             )
