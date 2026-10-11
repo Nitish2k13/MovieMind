@@ -835,10 +835,7 @@ class MovieMindPlayer:
             self.question_entry.config(
                 state="normal",
             )
-            if mode == "Ask a question":
-                self.question_entry.config()
-                self.question_entry.delete(0, "end")
-                self.question_entry.insert(0, "")
+            # Preserve the user's text when switching between input-based modes.
         else:
             self.input_frame.pack_forget()
 
