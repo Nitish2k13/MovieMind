@@ -1381,7 +1381,7 @@ Return only the answer, with no meta commentary.
                         r'<(?:a|div)[^>]+class="result__snippet"[^>]*>(.*?)</(?:a|div)>',
                         html, flags=re.I | re.S,
                     )
-                    clean = lambda value: re.sub(r"\\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
+                    clean = lambda value: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
                     for url, title_html, snippet_html in blocks[:3]:
                         snippets.append(
                             f"QUERY CLUE: {clue}\nTitle: {clean(title_html)}\nURL: {url}\n"
