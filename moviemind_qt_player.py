@@ -16,7 +16,20 @@ import threading
 import urllib.error
 import urllib.request
 import uuid
+import time
+from collections import deque
+from datetime import datetime
+from io import BytesIO
 from pathlib import Path
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+try:
+    import pytesseract
+except ImportError:
+    pytesseract = None
 
 from PySide6.QtCore import Qt, QTimer, QObject, QEvent, Signal
 from PySide6.QtGui import QAction, QKeySequence, QCursor
@@ -90,6 +103,19 @@ class MovieMindQtPlayer(QMainWindow):
         self.recent_qa_memory: list[dict[str, str]] = []
         self.reply_language = "English"
         self.ai_request_running = False
+        self.visual_memory = deque(maxlen=1440)
+        self._visual_memory_lock = threading.Lock()
+        self._visual_sample_in_flight = False
+        self._visual_last_signature = ""
+        self._visual_last_subtitle_signature = ""
+        self._visual_last_subtitle = ""
+        self._visual_last_subtitle_ocr = 0.0
+        self._visual_last_full_ocr = 0.0
+        self._visual_last_saved = 0.0
+        self._visual_monitor = QTimer(self)
+        self._visual_monitor.setInterval(1000)
+        self._visual_monitor.timeout.connect(self._sample_visual_memory)
+        self._visual_monitor.start()
         self._pending_snapshot_paths: set[str] = set()
         self.ai_bridge = AIResultBridge(self)
         self.ai_bridge.finished.connect(self._finish_ai_request)
@@ -344,6 +370,15 @@ class MovieMindQtPlayer(QMainWindow):
         line.setFrameShape(QFrame.HLine)
         line.setStyleSheet("color:#1b3552;")
         side.addWidget(line)
+
+        language_row = QHBoxLayout()
+        language_row.addWidget(QLabel("REPLY LANGUAGE"))
+        self.language_combo = QComboBox()
+        self.language_combo.addItems(["English", "Tamil", "Tanglish"])
+        self.language_combo.setCurrentText("English")
+        self.language_combo.currentTextChanged.connect(self._language_changed)
+        language_row.addWidget(self.language_combo, 1)
+        side.addLayout(language_row)
         side.addWidget(QLabel("CHOOSE AN ACTION"))
 
         answer_heading = QLabel("MOVIEMIND RESPONSE")
@@ -368,6 +403,7 @@ class MovieMindQtPlayer(QMainWindow):
             ("Movie overview", "▣  Movie overview", "Cast, story, runtime and box office"),
             ("Explain scene", "◉  Explain scene", "Analyze the current frame"),
             ("Explain dialogue", "❝  Explain dialogue", "Explain the current subtitle"),
+            ("Explain a word", "Aa  Explain a word", "Meaning in movie context"),
             ("Ask a question", "✳  Ask any question", "Ask about this movie"),
             ("Easter eggs / Hidden details", "⌕  Hidden details · ONLINE", "Online research; may take longer"),
         ]:
@@ -635,6 +671,7 @@ class MovieMindQtPlayer(QMainWindow):
             f"MovieMind answered: {item['answer'][:700]}"
             for item in self.recent_qa_memory[-5:]
         ) or "No earlier MovieMind conversation in this session."
+        visual_memory_context = self._build_visual_memory_context()
 
         if mode == "Movie overview":
             try:
@@ -648,9 +685,10 @@ class MovieMindQtPlayer(QMainWindow):
                 "Create a helpful offline overview of the movie named above using only your pretrained "
                 "knowledge, with these headings: Runtime, Director, Main Cast, Overview, Genre, "
                 "Production Budget, Worldwide Box Office Collection. Express budget and worldwide "
-                "theatrical gross in approximate Indian rupees as ₹ crore, using ₹83 per US dollar "
-                "for known USD figures. Do not confuse budget, domestic collection, worldwide collection, "
-                "or profit. If a figure is uncertain, write 'Not reliably available from offline knowledge'. "
+                "theatrical gross in US dollars ($), preserving commonly reported USD figures. "
+                "Do NOT convert any budget or box-office figures to Indian rupees. Do not confuse budget, "
+                "domestic collection, worldwide collection, or profit. If a figure is uncertain, write "
+                "'Not reliably available from offline knowledge'. "
                 "Use the supplied local file runtime as authoritative for this file, not necessarily the official cut. "
                 "Do not browse, call an API, or claim facts were verified online. Keep it concise and spoiler-light.\n"
                 f"Runtime reported by VLC for this local video file: {actual_runtime}."
@@ -715,6 +753,9 @@ CURRENT SUBTITLE:
 TIMESTAMPED SUBTITLE CONTEXT:
 {context}
 
+AUTOMATIC LIGHTWEIGHT VISUAL MEMORY (sampled frames, visual-change fingerprints and selective OCR; treat OCR as uncertain evidence):
+{visual_memory_context}
+
 RECENT CONVERSATION MEMORY (may contain previous model mistakes; treat as clues, not proof):
 {memory}
 
@@ -722,6 +763,8 @@ OFFLINE AND EVIDENCE RULES:
 - All normal assistant modes must work locally through Ollama; never browse, call web APIs, or access the network.
 - For scene/dialogue answers, the image is primary evidence and current/nearby subtitles are supporting evidence.
 - Movie overview and general questions are about the movie generally, not automatically the current scene.
+- Automatic visual memory is a compact history of sampled frames and selective OCR; it is not a guaranteed list of recognized characters or objects.
+- Use it to connect recent visual changes and visible text across the movie, but never treat OCR or a prior answer as certain proof.
 - Memory is for continuity, not proof; prior answers may be wrong.
 - Never invent character identities, actions, motivations, credits, or plot events.
 - If identity, object, speaker, or context is uncertain, say so instead of guessing.
@@ -848,6 +891,14 @@ Return only the answer, with no meta commentary.
             self.movie_title = clean_title
             self.subtitle_context.clear()
             self.recent_qa_memory.clear()
+            with self._visual_memory_lock:
+                self.visual_memory.clear()
+            self._visual_last_signature = ""
+            self._visual_last_subtitle_signature = ""
+            self._visual_last_subtitle = ""
+            self._visual_last_subtitle_ocr = 0.0
+            self._visual_last_full_ocr = 0.0
+            self._visual_last_saved = 0.0
             self.ai_input.clear()
             self.answer_area.setPlainText("New movie session started. Ask about the current scene or dialogue.")
             self.title_value.setText(clean_title)
@@ -1021,19 +1072,22 @@ Return only the answer, with no meta commentary.
 
     @staticmethod
     def _trim_movie_title(path: str) -> str:
-        """Turn noisy release filenames into a readable movie title."""
+        """Remove release metadata/language lists while preserving the film year."""
         title = Path(path).stem
         title = re.sub(r"^@?MovieBox[_ .-]*Studios?\s*", "", title, flags=re.I)
         title = re.sub(r"^@[A-Za-z0-9_.-]+\s+", "", title)
         title = re.sub(
             r"(?i)\s+(?:blu[ .-]?ray|web[ .-]?dl|web[ .-]?rip|hdrip|brrip|"
             r"dvdrip|x264|x265|hevc|1080p|720p|2160p|4k|proper|extended|"
-            r"remux|h\.?264|h\.?265)\b.*$",
+            r"remux|h\.?264|h\.?265|\d+gb\b).*?$",
             "", title,
         )
         title = re.sub(r"\s*[-_.]+\s*(?:mkv|mp4|avi)$", "", title, flags=re.I)
         title = re.sub(r"[._]+", " ", title)
-        return re.sub(r"\s+", " ", title).strip(" -_.") or Path(path).stem
+        title = re.sub(r"\s+", " ", title).strip(" -_.")
+        title = re.sub(r"\s+(\(?(?:19|20)\d{2}\)?)$", lambda m: f" ({m.group(1).strip('()')})", title)
+        return title or Path(path).stem
+
 
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
