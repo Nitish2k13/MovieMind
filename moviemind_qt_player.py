@@ -533,8 +533,28 @@ class MovieMindQtPlayer(QMainWindow):
         self._set_status("ONLINE EASTER EGG RESEARCH COMPLETE")
 
     def _render_easter_egg_history(self) -> None:
-        """Display findings and source links in the expanded Qt response panel."""
+        """Display findings and clickable clue-specific Google Images links."""
         import html
+        import urllib.parse
+
+        def clue_image_query(clue: str) -> str:
+            query = re.sub(r"(?i)^(?:the|a|an)\s+", "", clue.strip())
+            query = query.strip(" \t.'\"“”‘’")
+            # Search the named object/brand, not a movie-wide phrase or the whole sentence.
+            query = re.sub(
+                r"(?i)\s+(?:logo|symbol|emblem)\s+(?:displayed\s+)?(?:on|in)\s+(?:the\s+)?(?:phone|screen|device)$",
+                "", query,
+            )
+            query = re.sub(r"(?i)^contact\s+name\s+", "", query)
+            query = re.sub(r"(?i)\s+(?:game\s+)?cabinet$", "", query)
+            query = re.sub(
+                r"(?i)\s+(?:displayed|shown|visible)\s+(?:on|in)\s+(?:the\s+)?(?:phone|screen|device)$",
+                "", query,
+            )
+            query = re.sub(r"(?i)\s+(?:game|arcade)\s+(?:cabinet|machine)$", "", query)
+            query = query.strip(" .,:;-") or clue.strip()
+            return "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(query)
+
         self.answer_area.setMinimumHeight(300)
         self.answer_area.setMaximumHeight(520)
         self.answer_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -545,10 +565,21 @@ class MovieMindQtPlayer(QMainWindow):
             if index > 1:
                 blocks.append("<hr>")
             heading = f"Discovery {len(self.easter_egg_history) - index + 1} · {item['movie']} · {item['time']}"
-            body = html.escape(item["result"])
-            # Render clue-specific image searches as readable links instead of exposing raw URLs.
+            # Rebuild the image link from each displayed Clue line. This prevents the model
+            # from returning a movie-wide URL or a malformed, non-clickable URL.
+            result_lines = []
+            for line in item["result"].splitlines():
+                if re.match(r"(?i)^\s*google\s+images\s*:", line):
+                    continue
+                result_lines.append(line)
+                clue_match = re.match(r"(?i)^\s*clue\s*:\s*(.+?)\s*$", line)
+                if clue_match:
+                    url = clue_image_query(clue_match.group(1))
+                    result_lines.append(f"GOOGLE_IMAGES_LINK: {url}")
+            body = html.escape("\n".join(result_lines))
+            # Turn the marker into a descriptive hyperlink; QTextBrowser opens it externally.
             body = re.sub(
-                r"(?m)^GOOGLE_IMAGES_LINK:\\s*(https?://\\S+)",
+                r"(?m)^GOOGLE_IMAGES_LINK:\s*(https?://\S+)",
                 lambda match: (
                     '<a href="' + html.escape(match.group(1).rstrip('.'), quote=True) + '">'
                     'Open Google Images for this clue</a>'
@@ -1295,6 +1326,9 @@ Return only the answer, with no meta commentary.
             self.fullscreen_title.setText(clean_title)
             self._set_status("OPENING MOVIE")
             QTimer.singleShot(350, self._reattach_video)
+            # VLC can finish opening the media after play() returns; reapply the app's
+            # volume and clear VLC's internal mute state once its audio track is ready.
+            QTimer.singleShot(1200, self._restore_audio_output)
         except Exception as exc:
             QMessageBox.critical(self, "Could not open movie", str(exc))
 
@@ -1565,6 +1599,18 @@ Return only the answer, with no meta commentary.
                 self.player.audio_set_volume(value)
             except Exception:
                 pass
+
+    def _restore_audio_output(self) -> None:
+        """Reapply MovieMind's volume after VLC has initialized the selected media."""
+        if not self.player or not self.current_path:
+            return
+        try:
+            self.player.audio_set_mute(False)
+            self.player.audio_set_volume(self.volume.value())
+            if self.player.audio_get_track() == -1:
+                self._set_status("NO AUDIO TRACK SELECTED — CHECK THE AUDIO MENU")
+        except Exception as exc:
+            self._set_status(f"AUDIO INITIALIZATION CHECK FAILED: {exc}")
 
     def _track_menu(self, button: QPushButton, kind: str) -> None:
         if not self.player or not self.current_path:
