@@ -27,11 +27,15 @@ except ImportError:
 
 
 APP_TITLE = "MovieMind Player"
-BG = "#101218"
-PANEL = "#191d27"
-TEXT = "#f3f4f6"
-MUTED = "#a5adbd"
-ACCENT = "#8b5cf6"
+# Deep cinematic blue palette
+BG = "#080F1C"
+PANEL = "#101B2D"
+TEXT = "#F2F7FF"
+MUTED = "#93A8C7"
+ACCENT = "#2583F5"
+ACCENT_HOVER = "#46A0FF"
+PANEL_HOVER = "#1A2B45"
+BORDER = "#203653"
 
 
 class MovieMindPlayer:
@@ -143,7 +147,7 @@ class MovieMindPlayer:
         body = self.body
 
         self.video_frame = tk.Frame(body, bg="#050608", highlightthickness=1,
-                                    highlightbackground="#303645")
+                                    highlightbackground=BORDER)
         self.video_frame.pack(side="left", fill="both", expand=True)
 
         # Reserved space for the embedded AI companion. No AI is started in Phase 1.
@@ -162,7 +166,7 @@ class MovieMindPlayer:
         ).pack(anchor="w", padx=14, pady=(10, 4))
         self.title_var = tk.StringVar(value="")
         self.title_entry = tk.Entry(
-            companion, textvariable=self.title_var, bg="#252a36", fg=TEXT,
+            companion, textvariable=self.title_var, bg="#14243A", fg=TEXT,
             insertbackground=TEXT, relief="flat", font=("Segoe UI", 10)
         )
         self.title_entry.pack(fill="x", padx=14, pady=(0, 6), ipady=6)
@@ -181,11 +185,11 @@ class MovieMindPlayer:
             command=self._mode_changed,
         )
         self.mode_menu.config(
-            bg="#252a36", fg=TEXT, activebackground="#343b4b",
+            bg="#252a36", fg=TEXT, activebackground=PANEL_HOVER,
             activeforeground="white", relief="flat", bd=0,
             highlightthickness=0, anchor="w", font=("Segoe UI", 9)
         )
-        self.mode_menu["menu"].config(bg="#252a36", fg=TEXT, activebackground=ACCENT)
+        self.mode_menu["menu"].config(bg="#14243A", fg=TEXT, activebackground=ACCENT, activeforeground="white", relief="flat", borderwidth=0)
         self.mode_menu.pack(fill="x", padx=14, pady=(0, 8))
 
         tk.Label(
@@ -202,7 +206,7 @@ class MovieMindPlayer:
             activeforeground="white", relief="flat", bd=0,
             highlightthickness=0, anchor="w", font=("Segoe UI", 9)
         )
-        self.language_menu["menu"].config(bg="#252a36", fg=TEXT, activebackground=ACCENT)
+        self.language_menu["menu"].config(bg="#14243A", fg=TEXT, activebackground=ACCENT, activeforeground="white", relief="flat", borderwidth=0)
         self.language_menu.pack(fill="x", padx=14, pady=(0, 8))
 
         self.context_label = tk.Label(
@@ -269,7 +273,7 @@ class MovieMindPlayer:
         answer_scrollbar.pack(side="right", fill="y")
 
         self.status_label = tk.Label(
-            companion, text="PLAYER READY", bg="#242a38", fg="#c4b5fd",
+            companion, text="PLAYER READY", bg="#14243A", fg="#8FC3FF",
             font=("Segoe UI", 9, "bold"), padx=10, pady=7, anchor="w"
         )
         self.status_label.pack(fill="x", padx=14, pady=(4, 8))
@@ -291,8 +295,8 @@ class MovieMindPlayer:
 
         self.seek_scale = tk.Scale(
             controls, from_=0, to=1000, orient="horizontal", showvalue=False,
-            resolution=1, bg=BG, fg=TEXT, troughcolor="#34394a",
-            activebackground=ACCENT, highlightthickness=0, bd=0,
+            resolution=1, bg=BG, fg=TEXT, troughcolor="#1C3555",
+            activebackground=ACCENT_HOVER, highlightthickness=0, bd=0,
             command=self._seek_changed
         )
         self.seek_scale.pack(side="left", fill="x", expand=True, padx=(0, 12))
@@ -323,13 +327,22 @@ class MovieMindPlayer:
         self.volume_scale.pack(side="left")
 
     def _button(self, parent, label: str, command, primary: bool = False) -> tk.Button:
-        return tk.Button(
+        base = ACCENT if primary else "#17263D"
+        hover = ACCENT_HOVER if primary else PANEL_HOVER
+        button = tk.Button(
             parent, text=label, command=command,
-            bg=ACCENT if primary else "#252a36",
-            fg="white", activebackground="#6d43d8" if primary else "#343b4b",
-            activeforeground="white", relief="flat", bd=0,
-            padx=13, pady=9, cursor="hand2", font=("Segoe UI", 9, "bold")
+            bg=base, fg="white",
+            activebackground=hover, activeforeground="white",
+            relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=base, highlightcolor=ACCENT_HOVER,
+            padx=13, pady=9, cursor="hand2",
+            font=("Segoe UI Semibold", 9), takefocus=True,
         )
+        button.bind("<Enter>", lambda _event: button.configure(bg=hover, highlightbackground=ACCENT_HOVER))
+        button.bind("<Leave>", lambda _event: button.configure(bg=base, highlightbackground=base))
+        button.bind("<ButtonPress-1>", lambda _event: button.configure(bg=ACCENT if primary else "#203A5B"))
+        button.bind("<ButtonRelease-1>", lambda _event: button.configure(bg=hover, highlightbackground=ACCENT_HOVER))
+        return button
 
     def _show_missing_binding(self) -> None:
         if vlc is None:
@@ -1121,16 +1134,18 @@ SOURCE ANSWER:
             question_for_memory = "Movie overview"
         elif mode == "Explain scene":
             task = (
-                "Explain the CURRENT visible frame in at most 3 short sentences. Start with only "
-                "observable actions, clothing, objects, and setting. Identify a character by name "
-                "only if the frame plus reliable movie context makes the identity clear; otherwise "
-                "say 'the person on the left/right' or 'the figure in the frame'. Do not infer "
-                "identity from subtitle wording, a red suit, skin color, or a generic pose. Never "
-                "invent an object (for example, call something an orb only if it visibly has that "
-                "shape and appearance). The subtitle may belong to an off-screen speaker and is "
-                "not proof of who appears in the frame. If the frame is dark, ambiguous, or unclear, "
-                "state that limitation rather than completing the scene from imagination. Separate "
-                "what is visible from any interpretation."
+                "Give a useful scene explanation, not just a list of visible objects. Use up to 4 "
+                "sentences: (1) identify the characters only when supported by the frame and movie "
+                "context; (2) explain their immediate situation/action; (3) explain how the exact "
+                "current subtitle relates to the interaction, if it genuinely fits; (4) briefly state "
+                "the dramatic significance only when supported by reliable movie knowledge. For "
+                "Avengers: Infinity War, the line 'You're not the only one cursed with knowledge' "
+                "is said by Thanos to Doctor Strange on Titan; if the current frame and subtitle match "
+                "that moment, explain their conflict over knowledge and the future without inventing "
+                "extra actions. Do not assume every frame belongs to that moment. Never call a person "
+                "Rocket, Quill, Stark, Strange, or Thanos solely from a subtitle or clothing color. "
+                "Do not invent objects, motivations, or plot events. If the frame alone cannot establish "
+                "identity or action, state what is uncertain instead of guessing."
             )
             question_for_memory = "Explain the scene"
         elif mode == "Explain dialogue":
@@ -1668,7 +1683,7 @@ Return only the answer, with no meta commentary.
         overlay = tk.Toplevel(self.root)
         overlay.overrideredirect(True)
         overlay.attributes("-topmost", True)
-        overlay.configure(bg="#11141d")
+        overlay.configure(bg="#08172A")
         try:
             overlay.attributes("-alpha", 0.94)
         except tk.TclError:
@@ -1690,7 +1705,7 @@ Return only the answer, with no meta commentary.
         )
         self._overlay_volume.set(self.volume_scale.get())
         self._overlay_volume.pack(side="right", padx=(8, 14))
-        tk.Label(top, text="VOLUME", bg="#11141d", fg="#cbd5e1",
+        tk.Label(top, text="VOLUME", bg="#11141d", fg="#A9C4E8",
                  font=("Segoe UI", 8, "bold")).pack(side="right")
 
         bottom = tk.Frame(overlay, bg="#11141d")
