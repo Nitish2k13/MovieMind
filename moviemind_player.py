@@ -219,8 +219,10 @@ class MovieMindPlayer:
         self.question_entry.pack(fill="x", pady=(0, 6), ipady=6)
         self.question_entry.bind("<Return>", self._submit_question)
         self.question_entry.bind("<KeyPress>", self._question_typing_started, add="+")
+        self.question_entry.bind("<FocusOut>", self._text_entry_focus_left, add="+")
         self.input_frame.pack(fill="x", padx=14)
         self.title_entry.bind("<KeyPress>", self._question_typing_started, add="+")
+        self.title_entry.bind("<FocusOut>", self._text_entry_focus_left, add="+")
         self.mode_heading = tk.Label(
             companion, text="Ask a question", bg=PANEL, fg=TEXT,
             font=("Segoe UI", 12, "bold"), anchor="w", justify="left"
@@ -826,6 +828,17 @@ class MovieMindPlayer:
     def _question_typing_started(self, _event=None) -> None:
         self._keyboard_media_mode = False
 
+    def _text_entry_focus_left(self, _event=None) -> None:
+        # Once the user clicks anywhere outside an editable field, restore media keys.
+        self.root.after_idle(self._restore_media_keyboard_mode)
+
+    def _restore_media_keyboard_mode(self) -> None:
+        try:
+            if not self._is_text_entry_focused():
+                self._keyboard_media_mode = True
+        except tk.TclError:
+            self._keyboard_media_mode = True
+
     def _submit_question(self, _event=None) -> str:
         self.ask_movie()
         # Explicitly switch out of text-edit mode; the VLC native child may not
@@ -1162,8 +1175,8 @@ Return only the answer, with no meta commentary.
                 "model": "gemma3:4b",
                 "prompt": prompt,
                 "stream": False,
-                "keep_alive": "5m",
-                "options": {"temperature": 0.15, "num_predict": 260},
+                "keep_alive": "30m",
+                "options": {"temperature": 0.15, "num_predict": 220},
             }
             if snapshot_path:
                 # VLC creates screenshots asynchronously. Only attach a non-empty file
@@ -1205,25 +1218,26 @@ Return only the answer, with no meta commentary.
         def finish() -> None:
             self.ai_request_running = False
             try:
-                if result:
+                display_result = result
+                if display_result:
                     # Keep model output readable in a plain Tk label; remove Markdown markers.
                     import re
-                    result = re.sub(r"\\*\\*(.*?)\\*\\*", r"\\1", result)
-                    result = re.sub(r"(?m)^\\s*[-*]\\s+", "• ", result)
+                    display_result = re.sub(r"\\*\\*(.*?)\\*\\*", r"\\1", display_result)
+                    display_result = re.sub(r"(?m)^\\s*[-*]\\s+", "• ", display_result)
                 if error:
                     self.answer_label.config(text=error, fg="#fca5a5")
                     self.status_label.config(text="LOCAL AI UNAVAILABLE", fg="#fca5a5")
                 elif request_context.get("kind") == "translation":
-                    self.answer_label.config(text=result, fg=TEXT)
+                    self.answer_label.config(text=display_result, fg=TEXT)
                     self.status_label.config(
                         text=f"ANSWER IN {request_context.get('language', self.reply_language).upper()}",
                         fg="#86efac",
                     )
                 else:
                     language = request_context.get("language", self.reply_language)
-                    self.last_answer_source = result or ""
+                    self.last_answer_source = display_result or ""
                     self.last_answer_source_language = language
-                    self.answer_label.config(text=result, fg=TEXT)
+                    self.answer_label.config(text=display_result, fg=TEXT)
                     self.status_label.config(text="ANSWER READY", fg="#86efac")
                     self.recent_qa_memory.append({
                         "time": request_context.get("time", "unknown"),
