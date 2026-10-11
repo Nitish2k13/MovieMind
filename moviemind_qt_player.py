@@ -81,6 +81,7 @@ QMenu::item:selected { background: #176fd0; }
 
 class AIResultBridge(QObject):
     finished = Signal(str, str, object)
+    easter_egg_finished = Signal(str, str, str)
 
 
 def clock(ms: int) -> str:
@@ -118,8 +119,14 @@ class MovieMindQtPlayer(QMainWindow):
         self._visual_monitor.start()
         self._pending_snapshot_paths: set[str] = set()
         self._language_refresh_pending = False
+        self._language_refresh_timer = QTimer(self)
+        self._language_refresh_timer.setSingleShot(True)
+        self._language_refresh_timer.setInterval(900)
+        self._language_refresh_timer.timeout.connect(self._refresh_answer_for_language)
+        self.easter_egg_history: list[dict[str, str]] = []
         self.ai_bridge = AIResultBridge(self)
         self.ai_bridge.finished.connect(self._finish_ai_request)
+        self.ai_bridge.easter_egg_finished.connect(self._finish_easter_egg_research)
         self.duration_ms = 0
         self.dragging_seek = False
         self._pending_seek_ms: int | None = None
@@ -471,15 +478,76 @@ class MovieMindQtPlayer(QMainWindow):
             self._ask_ai()
 
     def _start_online_research(self) -> None:
-        # Keep the UI honest until the legacy online research pipeline is migrated.
+        """Start the existing Easter-egg research pipeline without changing its research logic."""
+        if not self.movie_title:
+            self.answer_area.setPlainText("Open a movie and check its title first.")
+            return
+        if not self.player or not self.current_path:
+            self.answer_area.setPlainText("Open a movie before researching Easter eggs.")
+            return
+        if self.ai_request_running:
+            self._set_status("ANOTHER MOVIEMIND REQUEST IS RUNNING")
+            return
+        snapshot_path = str(Path(tempfile.gettempdir()) / f"moviemind_easteregg_{uuid.uuid4().hex}.png")
+        try:
+            result = self.player.video_take_snapshot(0, snapshot_path, 0, 0)
+            if result == -1:
+                self.answer_area.setPlainText("Could not capture the current frame. Please try again.")
+                return
+        except Exception as exc:
+            self.answer_area.setPlainText(f"Could not capture the current frame: {exc}")
+            return
+        self._pending_snapshot_paths.add(snapshot_path)
+        self.ai_request_running = True
         self.answer_area.setPlainText(
-            "Online Easter-egg research is the next integration step. "
-            "When connected, this mode will show: "
-            "'Thinking online — this can take a little longer than offline mode.'"
+            "Inspecting the current frame and researching possible Easter eggs online…\n"
+            "This can take a little longer than offline modes."
         )
-        self.answer_area.setMinimumHeight(150)
-        self.answer_area.setMaximumHeight(260)
-        self._set_status("ONLINE RESEARCH INTEGRATION PENDING")
+        self._set_status("EASTER EGG RESEARCH…")
+        threading.Thread(
+            target=self._run_easter_egg_research,
+            args=(snapshot_path, self.movie_title, self.reply_language),
+            daemon=True,
+        ).start()
+
+    def _finish_easter_egg_research(self, result: str, error: str, movie_title: str) -> None:
+        self.ai_request_running = False
+        if error:
+            self.answer_area.setPlainText(error)
+            self._set_status("EASTER EGG RESEARCH FAILED")
+            return
+        self.easter_egg_history.append({
+            "movie": movie_title,
+            "time": time.strftime("%H:%M:%S"),
+            "result": result or "No result returned.",
+        })
+        self._render_easter_egg_history()
+        self._set_status("ONLINE EASTER EGG RESEARCH COMPLETE")
+
+    def _render_easter_egg_history(self) -> None:
+        """Display findings and source links in the Qt response panel."""
+        import html
+        self.answer_area.setReadOnly(False)
+        self.answer_area.clear()
+        blocks = []
+        for index, item in enumerate(reversed(self.easter_egg_history), start=1):
+            if index > 1:
+                blocks.append("<hr>")
+            heading = f"Discovery {len(self.easter_egg_history) - index + 1} · {item['movie']} · {item['time']}"
+            body = html.escape(item["result"])
+            body = re.sub(
+                r"(https?://[^\\s\\]\\)>,]+)",
+                lambda match: '<a href="' + html.escape(match.group(0).rstrip('.'), quote=True) + '">' +
+                    html.escape(match.group(0).rstrip('.')) + '</a>' +
+                    html.escape(match.group(0)[len(match.group(0).rstrip('.')):]),
+                body,
+            )
+            body = re.sub(r"(?im)^Status:\\s*(CONFIRMED)\\b", r'<span style="color:#4ade80"><b>Status: \\1</b></span>', body)
+            body = re.sub(r"(?im)^Status:\\s*(POSSIBLE)\\b", r'<span style="color:#facc15"><b>Status: \\1</b></span>', body)
+            body = re.sub(r"(?im)^Status:\\s*(NOT VERIFIED|UNVERIFIED)\\b", r'<span style="color:#f87171"><b>Status: \\1</b></span>', body)
+            blocks.append(f'<p style="color:#c4b5fd"><b>{html.escape(heading)}</b></p><pre style="white-space:pre-wrap;font-family:inherit">{body}</pre>')
+        self.answer_area.setHtml("\\n".join(blocks))
+        self.answer_area.setReadOnly(True)
 
     def _mode_changed(self, mode: str) -> None:
         needs_input = mode == "Ask a question"
@@ -536,14 +604,29 @@ class MovieMindQtPlayer(QMainWindow):
             return
         if self.current_mode == "Easter eggs / Hidden details":
             self.answer_area.setPlainText(
-                f"Language switched to {language}. Run the hidden-details search again to request its results in this language."
+                f"Language switched to {language}. Select Hidden details again to rerun the online research in this language."
             )
             self._set_status(f"LANGUAGE SWITCHED TO {language.upper()}")
             return
-        self.answer_area.setPlainText(f"Switching response language to {language}…")
-        self._set_status(f"SWITCHING LANGUAGE TO {language.upper()}")
+        self._language_refresh_pending = True
+        self.answer_area.setPlainText(
+            f"Switching response language to {language}…\\n"
+            "MovieMind will refresh the current answer locally. The fan may briefly speed up while the AI works; this is normal. "
+            "If you switch languages several times, only the last selection will be processed."
+        )
+        self._set_status(f"LANGUAGE SWITCHED · REFRESHING IN {language.upper()}")
+        # Debounce rapid toggles so Gemma runs once for the final selected language.
+        self._language_refresh_timer.start()
+
+    def _refresh_answer_for_language(self) -> None:
+        if not self._language_refresh_pending:
+            return
         if self.ai_request_running:
-            self._language_refresh_pending = True
+            # Wait for the current local inference to finish, then refresh only once.
+            self._language_refresh_timer.start(700)
+            return
+        if self.current_mode == "Easter eggs / Hidden details":
+            self._language_refresh_pending = False
             return
         self._language_refresh_pending = False
         self._ask_ai()
@@ -850,6 +933,192 @@ Return only the answer, with no meta commentary.
             daemon=True,
         ).start()
 
+    def _run_easter_egg_research(self, snapshot_path: str, movie_title: str, language: str) -> None:
+        import base64
+        import json
+        import re
+        import time
+        import urllib.parse
+        import urllib.request
+        import urllib.error
+
+        result = None
+        error = None
+        try:
+            # Easter egg research requires internet; normal AI modes remain local/offline.
+            connectivity_check = urllib.request.Request(
+                "https://www.google.com/generate_204",
+                headers={"User-Agent": "MovieMind/1.0"},
+            )
+            try:
+                with urllib.request.urlopen(connectivity_check, timeout=4):
+                    pass
+            except Exception:
+                raise RuntimeError(
+                    "You appear to be offline. Easter egg research needs an internet connection; "
+                    "connect to the internet and select this mode again."
+                )
+            for _ in range(20):
+                if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
+                    break
+                time.sleep(0.1)
+            if not os.path.exists(snapshot_path) or os.path.getsize(snapshot_path) == 0:
+                raise RuntimeError("The player did not produce a readable frame. Try again.")
+            with open(snapshot_path, "rb") as frame_file:
+                image_b64 = base64.b64encode(frame_file.read()).decode("ascii")
+            vision_prompt = (
+                f"Movie: {movie_title}. Inspect this exact frame and list at most 3 visually distinctive "
+                "details that could plausibly be researched as a movie-specific Easter egg. Prioritize unusual "
+                "symbols, recognizable props, logos, artwork, posters, readable signs, repeated motifs, or objects "
+                "with a specific franchise connection. Do NOT list generic furniture (ordinary sofas, lamps, "
+                "bookshelves, carpets, stairs) unless a unique marking or design makes it specifically meaningful. "
+                "Ignore subtitles and player UI. First describe what is plainly visible; do not infer hidden meaning. "
+                "Only state a color when it is clear in the frame; if uncertain, omit the color. Never invent a blue "
+                "lamp or other color/detail that is not plainly visible. Do not identify characters unless highly "
+                "confident from visual evidence and movie context. Return one short line per clue, or say no "
+                "distinctive movie-specific clue is visible. These are candidates, not confirmed Easter eggs."
+            )
+            payload = json.dumps({
+                "model": "gemma3:4b", "prompt": vision_prompt, "images": [image_b64],
+                "stream": False, "keep_alive": "30m",
+                "options": {"temperature": 0.1, "num_predict": 160, "num_ctx": 2048},
+            }).encode("utf-8")
+            request = urllib.request.Request(
+                "http://localhost:11434/api/generate", data=payload,
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=120) as response:
+                clues = json.loads(response.read().decode("utf-8")).get("response", "").strip()
+            if not clues:
+                clues = "No distinctive clue could be identified confidently from this frame."
+            # Search each candidate independently with the movie title, so evidence can be tied
+            # to a specific clue rather than diluted by one giant combined query.
+            clue_lines = [line.strip(" -•0123456789.\\t") for line in clues.splitlines() if line.strip()]
+            clue_lines = [line for line in clue_lines if len(line) > 8][:3]
+            if not clue_lines:
+                clue_lines = [clues[:180]]
+            snippets = []
+            for clue in clue_lines:
+                # Keep the displayed clue intact, but remove visual-report filler from search queries.
+                # This helps image results focus on the actual object instead of phrases like
+                # "is visible" or "is present in the scene".
+                search_clue = re.sub(
+                    r"(?i)\b(?:is|are|was|were)\s+(?:clearly\s+)?"
+                    r"(?:visible|present|seen|shown)(?:\s+(?:in|on|within)\s+"
+                    r"(?:the\s+)?(?:scene|image|frame|screen))?\b",
+                    "",
+                    clue,
+                )
+                search_clue = re.sub(r"(?i)\b(?:easter\s+egg|hidden\s+detail)\b", "", search_clue)
+                search_clue = re.sub(r"\s+", " ", search_clue).strip(" .,:;-")
+                if not search_clue:
+                    search_clue = clue
+                search_phrases = [f'"{movie_title}" "{search_clue}" Easter egg explanation']
+                # Numbers may encode a real-world date or tribute. Run a separate, targeted
+                # research query rather than assuming the number's meaning from the frame.
+                if re.search(r"\d", search_clue):
+                    search_phrases.append(
+                        f'"{movie_title}" "{search_clue}" cast crew birthday anniversary tribute death date'
+                    )
+                for search_phrase in search_phrases:
+                    search_url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(search_phrase)
+                    search_req = urllib.request.Request(
+                        search_url, headers={"User-Agent": "Mozilla/5.0 (compatible; MovieMind/1.0)"},
+                    )
+                    try:
+                        with urllib.request.urlopen(search_req, timeout=10) as response:
+                            html = response.read().decode("utf-8", errors="replace")
+                        blocks = re.findall(
+                            r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?'
+                            r'<(?:a|div)[^>]+class="result__snippet"[^>]*>(.*?)</(?:a|div)>',
+                            html, flags=re.I | re.S,
+                        )
+                        clean = lambda value: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
+                        if blocks:
+                            for url, title_html, snippet_html in blocks[:3]:
+                                snippets.append(
+                                    f"QUERY CLUE: {clue}\nSEARCH QUERY: {search_phrase}\n"
+                                    f"Title: {clean(title_html)}\nURL: {url}\n"
+                                    f"Snippet: {clean(snippet_html)}"
+                                )
+                        else:
+                            fallback_url = "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(
+                                f"{movie_title} {search_clue}"
+                            )
+                            snippets.append(
+                                f"QUERY CLUE: {clue}\nSEARCH QUERY: {search_phrase}\n"
+                                f"No usable direct result links were returned. "
+                                f"Use this Google Images link to inspect the clue: {fallback_url}"
+                            )
+                    except Exception as exc:
+                        fallback_url = "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(
+                            f"{movie_title} {search_clue}"
+                        )
+                        snippets.append(
+                            f"QUERY CLUE: {clue}\nSEARCH QUERY: {search_phrase}\n"
+                            f"Search provider error: {type(exc).__name__}: {exc}\n"
+                            f"Inspect this clue in Google Images: {fallback_url}"
+                        )
+            web_evidence = "\n\n".join(snippets) or "No usable web results were returned by the search provider."
+            synthesis_prompt = (
+                f"You are MovieMind's careful Easter-egg researcher. Reply in {language}. Movie: {movie_title}.\n"
+                f"VISIBLE CLUE CANDIDATES (the vision model can be wrong):\n{clues}\n\n"
+                f"WEB SEARCH RESULTS (unverified snippets):\n{web_evidence}\n\n"
+                "Return at most 3 findings in plain text, without Markdown bold markers (**), using this format: "
+                "Clue: ...\nPossible connection: ...\nEvidence: ...\nStatus: CONFIRMED / POSSIBLE / NOT VERIFIED. "
+                "Do not pad the answer with ordinary set dressing. A sofa, lamp, bookshelf, carpet, or staircase "
+                "is not an Easter egg by itself; include it only if a reliable result links that specific visible "
+                "detail to this exact movie. Keep visual observation separate from interpretation: the vision model "
+                "only proposes what may be visible, and its description is NOT external evidence. CONFIRMED requires "
+                "a credible source that explicitly supports the exact detail in this exact movie. A generic franchise "
+                "page, a search query, a similar-looking emblem, or an unsupported fan theory is not enough. "
+                "If snippets are vague, contradictory, or do not mention the specific clue, use NOT VERIFIED. "
+                "A Google Images link is only a way to inspect pictures and is NEVER evidence for a claim. "
+                "If only a Google Images link is available and no credible source supports the connection, "
+                "the status MUST be NOT VERIFIED and the possible connection should be described as unknown. "
+                "Never use CONFIRMED just because the visual clue itself is visible; confirmation is about "
+                "the claimed Easter-egg meaning, not the existence of an object in the frame. "
+                "Use POSSIBLE only when a source provides a plausible but incomplete connection. For visible "
+                "numbers, dates, digital clocks, signs, or license plates, investigate whether the exact number "
+                "is documented as a cast/crew birthday, anniversary, death date, memorial, tribute, or other "
+                "film-related reference. Search results that merely repeat the number are not proof. Do not match "
+                "a date to a person's biography unless a credible source supports both the exact date and the "
+                "connection to this movie or scene. A clock reading such as 201:19:15 may be a timestamp or "
+                "fictional display, not a real-world date; do not force a date interpretation. Never infer a "
+                "Power Stone, Nova Corps, creator intention, or other specific meaning from color/shape alone. "
+                "Do not treat the visual model's guess as evidence. Include source titles and URLs when available. "
+                "If a direct article URL is missing, preserve the provided Google Images URL for that clue; "
+                "label it 'Google Images' rather than presenting it as an article proving the claim. Never invent URLs. "
+                "If no distinctive clue has evidence, say that plainly and suggest pausing on a clearer frame. "
+                "Keep the answer concise and stop after the third finding."
+            )
+            payload = json.dumps({
+                "model": "gemma3:4b", "prompt": synthesis_prompt, "stream": False,
+                "keep_alive": "30m",
+                "options": {"temperature": 0.1, "num_predict": 240, "num_ctx": 2048},
+            }).encode("utf-8")
+            request = urllib.request.Request(
+                "http://localhost:11434/api/generate", data=payload,
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=120) as response:
+                result = json.loads(response.read().decode("utf-8")).get("response", "").strip()
+            if not result:
+                result = f"Visible candidates:\n{clues}\n\nResearch did not return a final summary."
+        except urllib.error.URLError as exc:
+            error = f"Could not reach local Ollama or the web search service: {exc}"
+        except Exception as exc:
+            error = f"Easter egg research failed: {exc}"
+        finally:
+            try:
+                if os.path.exists(snapshot_path):
+                    os.remove(snapshot_path)
+            except OSError:
+                pass
+            self._pending_snapshot_paths.discard(snapshot_path)
+
+        self.ai_bridge.easter_egg_finished.emit(result or "", error or "", movie_title)
+
     def _run_local_ai(self, prompt: str, snapshot_path: str | None, request_context: dict[str, str]) -> None:
         result, error = "", ""
         try:
@@ -897,10 +1166,12 @@ Return only the answer, with no meta commentary.
         self.ai_request_running = False
         self.ai_submit.setEnabled(True)
         if self._language_refresh_pending and context.get("language") != self.reply_language:
-            self._language_refresh_pending = False
-            self.answer_area.setPlainText(f"Switching response language to {self.reply_language}…")
-            self._set_status(f"SWITCHING LANGUAGE TO {self.reply_language.upper()}")
-            QTimer.singleShot(0, self._ask_ai)
+            self.answer_area.setPlainText(
+                f"Switching response language to {self.reply_language}…\\n"
+                "The fan may briefly speed up while the local AI refreshes the answer; this is normal."
+            )
+            self._set_status(f"LANGUAGE SWITCHED · REFRESHING IN {self.reply_language.upper()}")
+            self._language_refresh_timer.start(200)
             return
         if error:
             self.answer_area.setPlainText(error)
