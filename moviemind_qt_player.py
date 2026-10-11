@@ -369,6 +369,347 @@ class MovieMindQtPlayer(QMainWindow):
         side.addWidget(self.status)
         content.addWidget(self.sidebar)
 
+    def _select_mode(self, mode: str) -> None:
+        self.mode_combo.setCurrentText(mode)
+        if mode in ("Movie overview", "Explain scene", "Explain dialogue"):
+            self._ask_ai()
+
+    def _mode_changed(self, mode: str) -> None:
+        needs_input = mode in ("Ask a question", "Explain a word")
+        self.ai_input.setVisible(needs_input)
+        self.ai_submit.setVisible(needs_input)
+        if mode == "Ask a question":
+            self.ai_input.setPlaceholderText("Ask a question about this movie…")
+            self.ai_submit.setText("Ask MovieMind")
+            self.answer_area.setPlaceholderText("Ask about the movie. Normal questions run locally.")
+        elif mode == "Explain a word":
+            self.ai_input.setPlaceholderText("Enter a word or phrase…")
+            self.ai_submit.setText("Explain word")
+            self.answer_area.setPlaceholderText("Enter a word or phrase from the movie.")
+        elif mode == "Easter eggs / Hidden details":
+            self.answer_area.setPlainText(
+                "Easter-egg research uses a separate online research pipeline. "
+                "That pipeline is being migrated separately; the legacy implementation remains unchanged."
+            )
+            self._set_status("EASTER EGG MIGRATION PENDING")
+        elif mode == "Explain scene":
+            self.answer_area.setPlainText("Analyzing the current frame locally…")
+        elif mode == "Explain dialogue":
+            self.answer_area.setPlainText("Explaining the current subtitle locally…")
+        elif mode == "Movie overview":
+            self.answer_area.setPlainText("Preparing the offline movie overview…")
+
+    def _language_changed(self, language: str) -> None:
+        self.reply_language = language
+
+    def _submit_ai_input(self) -> None:
+        mode = self.mode_combo.currentText()
+        if mode in ("Ask a question", "Explain a word") and not self.ai_input.text().strip():
+            self.answer_area.setPlainText(
+                "Type a question." if mode == "Ask a question" else "Type the word or phrase to explain."
+            )
+            return
+        self._ask_ai()
+
+    @staticmethod
+    def _parse_subtitle_file(path: str) -> list[dict[str, object]]:
+        timestamp_re = re.compile(
+            r"(?P<start>\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*"
+            r"(?P<end>\d{2}:\d{2}:\d{2}[,.]\d{3})"
+        )
+
+        def to_ms(value: str) -> int:
+            hours, minutes, rest = value.replace(",", ".").split(":")
+            seconds, millis = rest.split(".")
+            return ((int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1000
+                    + int(millis.ljust(3, "0")[:3]))
+
+        try:
+            raw = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            return []
+        records = []
+        for block in re.split(r"\n\s*\n", raw.strip()):
+            lines = [line.strip() for line in block.splitlines() if line.strip()]
+            timestamp_index = next((i for i, line in enumerate(lines) if "-->" in line), None)
+            if timestamp_index is None:
+                continue
+            match = timestamp_re.search(lines[timestamp_index])
+            if not match:
+                continue
+            text_lines = [
+                re.sub(r"<[^>]+>", "", re.sub(r"\{[^}]*\}", "", line)).strip()
+                for line in lines[timestamp_index + 1:]
+            ]
+            text_lines = [line for line in text_lines if line and not re.fullmatch(r"\d+", line)]
+            text = " ".join(text_lines).strip()
+            if text:
+                records.append({
+                    "start_ms": to_ms(match.group("start")),
+                    "end_ms": to_ms(match.group("end")),
+                    "text": text,
+                })
+        return records
+
+    def _current_subtitle(self, current_ms: int) -> str:
+        active = [
+            item for item in self.subtitle_context
+            if int(item["start_ms"]) <= current_ms <= int(item["end_ms"])
+        ]
+        if active:
+            return " ".join(str(item["text"]) for item in active[-2:])
+        nearby = sorted(
+            self.subtitle_context,
+            key=lambda item: min(
+                abs(current_ms - int(item["start_ms"])),
+                abs(current_ms - int(item["end_ms"]))
+            )
+        )
+        if nearby:
+            distance = min(
+                abs(current_ms - int(nearby[0]["start_ms"])),
+                abs(current_ms - int(nearby[0]["end_ms"]))
+            )
+            if distance <= 2500:
+                return str(nearby[0]["text"])
+        return ""
+
+    @staticmethod
+    def _language_instruction(language: str) -> str:
+        if language == "Tamil":
+            return (
+                "Answer in natural Tamil using Tamil Unicode script. Keep movie titles, "
+                "character names, and proper nouns in their original form where appropriate."
+            )
+        if language == "Tanglish":
+            return (
+                "IMPORTANT: Write in spoken Tamil transliterated into English/Latin letters "
+                "(Tanglish), as Tamil speakers casually speak in conversation. Do NOT answer "
+                "in English. Use Tamil words, Tamil grammar, and Tamil sentence order, but spell "
+                "the Tamil sounds with English letters only. Use natural colloquial forms such as "
+                "'irukku', 'pannraan', 'aagum', 'illa', 'appuram', and 'adhunaala' where they fit. "
+                "Do not use Tamil Unicode script. Keep movie titles and character names in their "
+                "original form. Check that the explanation is predominantly Tanglish."
+            )
+        return "Answer in clear, natural English."
+
+    def _ask_ai(self) -> None:
+        mode = self.mode_combo.currentText()
+        user_input = self.ai_input.text().strip()
+        if mode == "Easter eggs / Hidden details":
+            self._mode_changed(mode)
+            return
+        if mode in ("Ask a question", "Explain a word") and not user_input:
+            self._submit_ai_input()
+            return
+        if not self.movie_title or not self.current_path:
+            self.answer_area.setPlainText("Open a movie first.")
+            return
+        if self.ai_request_running:
+            self._set_status("AI REQUEST ALREADY RUNNING")
+            return
+
+        try:
+            current_ms = max(0, self.player.get_time()) if self.player else 0
+        except Exception:
+            current_ms = 0
+        nearby = [
+            item for item in self.subtitle_context
+            if int(item["start_ms"]) <= current_ms + 45000
+            and int(item["end_ms"]) >= max(0, current_ms - 45000)
+        ]
+        words = {
+            word.lower().strip(".,!?;:\"'()[]{}")
+            for word in user_input.split()
+            if len(word.strip(".,!?;:\"'()[]{}")) > 3
+        } if mode in ("Ask a question", "Explain a word") else set()
+        matching = [
+            item for item in self.subtitle_context
+            if words and any(word in str(item["text"]).lower() for word in words)
+        ]
+        selected, seen = [], set()
+        for item in nearby[-14:] + matching[:8]:
+            key = (item["start_ms"], item["text"])
+            if key not in seen:
+                seen.add(key)
+                selected.append(item)
+        context = "\n".join(
+            f"[{self._format_time(int(item['start_ms']))}] {item['text']}"
+            for item in selected[-18:]
+        ) or "No timestamped subtitle context is available."
+        current_subtitle = self._current_subtitle(current_ms) or "No subtitle line is active at this exact playback time."
+        memory = "\n".join(
+            f"[{item['time']}] User asked ({item['mode']}): {item['question']}\n"
+            f"MovieMind answered: {item['answer'][:700]}"
+            for item in self.recent_qa_memory[-5:]
+        ) or "No earlier MovieMind conversation in this session."
+
+        if mode == "Movie overview":
+            try:
+                media_length_ms = self.player.get_length() if self.player else -1
+            except Exception:
+                media_length_ms = -1
+            if media_length_ms is None or media_length_ms <= 0:
+                media_length_ms = self.duration_ms
+            actual_runtime = self._format_time(media_length_ms) if media_length_ms and media_length_ms > 0 else "Unavailable from the media player"
+            task = (
+                "Create a helpful offline overview of the movie named above using only your pretrained "
+                "knowledge, with these headings: Runtime, Director, Main Cast, Overview, Genre, "
+                "Production Budget, Worldwide Box Office Collection. Express budget and worldwide "
+                "theatrical gross in approximate Indian rupees as ₹ crore, using ₹83 per US dollar "
+                "for known USD figures. Do not confuse budget, domestic collection, worldwide collection, "
+                "or profit. If a figure is uncertain, write 'Not reliably available from offline knowledge'. "
+                "Use the supplied local file runtime as authoritative for this file, not necessarily the official cut. "
+                "Do not browse, call an API, or claim facts were verified online. Keep it concise and spoiler-light.\n"
+                f"Runtime reported by VLC for this local video file: {actual_runtime}."
+            )
+            question_for_memory = "Movie overview"
+        elif mode == "Explain scene":
+            task = (
+                "Give a useful scene explanation in up to 4 sentences: identify characters only when supported "
+                "by the frame and movie context, explain the immediate action, relate the exact current subtitle "
+                "if it genuinely fits, and state dramatic significance only when supported. Never identify a "
+                "character from subtitle or clothing color alone. Do not invent objects, motivations, or plot events. "
+                "If identity or action is uncertain, say so instead of guessing."
+            )
+            question_for_memory = "Explain the scene"
+        elif mode == "Explain dialogue":
+            task = (
+                "Explain the CURRENT subtitle in at most 3 short sentences. Refer to the exact available subtitle, "
+                "explain its plain meaning and immediate implication, and do not invent a different scene, object, "
+                "character, speaker, or motive. A line addressing a character does not identify the speaker. "
+                "If speaker or context is uncertain, say so briefly."
+            )
+            question_for_memory = "Explain the current dialogue"
+        elif mode == "Explain a word":
+            task = (
+                f"Explain the word or phrase '{user_input}' in this format:\n"
+                "Simple meaning: <plain meaning>\n"
+                "In this movie: <meaning in the current dialogue/scene, if supported>. Keep it concise. "
+                "If the movie context does not establish a special meaning, say so rather than inventing one."
+            )
+            question_for_memory = user_input
+        else:
+            task = (
+                f"Answer this question about the movie generally: {user_input}\n"
+                "Answer from general movie knowledge available in the local model. Do not assume the user asks "
+                "about the current scene unless stated. Do not browse or call an online service. If uncertain, "
+                "state that briefly rather than inventing a specific fact."
+            )
+            question_for_memory = user_input
+
+        language = self.reply_language
+        prompt = f"""You are MovieMind, a local movie companion running on the user's computer.
+{self._language_instruction(language)}
+
+MOVIE: {self.movie_title}
+PLAYBACK TIME: {self._format_time(current_ms)}
+USER MODE: {mode}
+
+CURRENT SUBTITLE:
+{current_subtitle}
+
+TIMESTAMPED SUBTITLE CONTEXT:
+{context}
+
+RECENT CONVERSATION MEMORY (may contain previous model mistakes; treat as clues, not proof):
+{memory}
+
+OFFLINE AND EVIDENCE RULES:
+- All normal assistant modes must work locally through Ollama; never browse, call web APIs, or access the network.
+- For scene/dialogue answers, the image is primary evidence and current/nearby subtitles are supporting evidence.
+- Movie overview and general questions are about the movie generally, not automatically the current scene.
+- Memory is for continuity, not proof; prior answers may be wrong.
+- Never invent character identities, actions, motivations, credits, or plot events.
+- If identity, object, speaker, or context is uncertain, say so instead of guessing.
+- Distinguish direct evidence from interpretation and keep answers concise.
+- Do not expose hidden reasoning or repeat the user's question.
+
+TASK:
+{task}
+
+Return only the answer, with no meta commentary.
+"""
+        snapshot_path = None
+        if mode in ("Explain scene", "Explain dialogue"):
+            try:
+                snapshot_path = str(Path(tempfile.gettempdir()) / f"moviemind_frame_{uuid.uuid4().hex}.png")
+                self.player.video_take_snapshot(0, snapshot_path, 0, 0)
+                self._pending_snapshot_paths.add(snapshot_path)
+            except Exception:
+                snapshot_path = None
+        request_context = {
+            "mode": mode, "question": question_for_memory,
+            "language": language, "time": self._format_time(current_ms),
+        }
+        self.ai_request_running = True
+        self.ai_submit.setEnabled(False)
+        self.answer_area.setPlainText("Thinking locally with Gemma 3…")
+        self._set_status("ASKING LOCAL AI")
+        threading.Thread(
+            target=self._run_local_ai,
+            args=(prompt, snapshot_path, request_context),
+            daemon=True,
+        ).start()
+
+    def _run_local_ai(self, prompt: str, snapshot_path: str | None, request_context: dict[str, str]) -> None:
+        result, error = "", ""
+        try:
+            request_data = {
+                "model": "gemma3:4b", "prompt": prompt, "stream": False,
+                "keep_alive": "30m", "options": {"temperature": 0.15, "num_predict": 220},
+            }
+            if snapshot_path:
+                import time
+                for _ in range(15):
+                    if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
+                        break
+                    time.sleep(0.1)
+                if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
+                    with open(snapshot_path, "rb") as image_file:
+                        request_data["images"] = [base64.b64encode(image_file.read()).decode("ascii")]
+            payload = json.dumps(request_data).encode("utf-8")
+            request = urllib.request.Request(
+                "http://localhost:11434/api/generate", data=payload,
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=120) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            result = data.get("response", "").strip() or "The local model returned an empty answer."
+        except urllib.error.URLError as exc:
+            error = (
+                "MovieMind's local AI is unavailable. Start Ollama and check 'ollama list'. "
+                "The required model is gemma3:4b. Details: " + str(exc)
+            )
+        except Exception as exc:
+            error = f"Local AI request failed: {exc}"
+        finally:
+            if snapshot_path:
+                try:
+                    if os.path.exists(snapshot_path):
+                        os.remove(snapshot_path)
+                except OSError:
+                    pass
+                self._pending_snapshot_paths.discard(snapshot_path)
+        self.ai_bridge.finished.emit(result, error, request_context)
+
+    def _finish_ai_request(self, result: str, error: str, context: object) -> None:
+        self.ai_request_running = False
+        self.ai_submit.setEnabled(True)
+        if error:
+            self.answer_area.setPlainText(error)
+            self._set_status("LOCAL AI UNAVAILABLE")
+            return
+        self.answer_area.setPlainText(result)
+        self._set_status("ANSWER READY")
+        self.recent_qa_memory.append({
+            "time": context.get("time", "unknown"),
+            "mode": context.get("mode", "question"),
+            "question": context.get("question", ""),
+            "answer": result,
+        })
+        self.recent_qa_memory = self.recent_qa_memory[-8:]
+
     def _icon_button(self, text: str, tooltip: str, callback) -> QPushButton:
         button = QPushButton(text)
         button.setObjectName("iconButton")
