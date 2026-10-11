@@ -333,6 +333,22 @@ class MovieMindQtPlayer(QMainWindow):
         side.addWidget(line)
         side.addWidget(QLabel("CHOOSE AN ACTION"))
 
+        answer_heading = QLabel("MOVIEMIND RESPONSE")
+        answer_heading.setObjectName("eyebrow")
+        side.addWidget(answer_heading)
+        self.answer_area = QTextEdit()
+        self.answer_area.setReadOnly(True)
+        self.answer_area.setPlaceholderText("Choose an action above to get started.")
+        self.answer_area.setMinimumHeight(70)
+        self.answer_area.setMaximumHeight(110)
+        self.answer_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.answer_area.setStyleSheet(
+            "QTextEdit { background:#081526; color:#eaf3ff; border:1px solid #1b3858; "
+            "border-radius:8px; padding:8px; font-size:12px; }"
+        )
+        side.addWidget(self.answer_area)
+
+
         self.current_mode = "Ask a question"
         self.mode_buttons = {}
         for mode, label, detail in [
@@ -355,6 +371,7 @@ class MovieMindQtPlayer(QMainWindow):
             self.mode_buttons[mode] = tile
             side.addWidget(tile)
 
+
         self.ai_input = QLineEdit()
         self.ai_input.setPlaceholderText("Ask a question about this movie…")
         self.ai_input.returnPressed.connect(self._submit_ai_input)
@@ -366,21 +383,6 @@ class MovieMindQtPlayer(QMainWindow):
         self.ai_submit.clicked.connect(self._submit_ai_input)
         self.ai_submit.hide()
         side.addWidget(self.ai_submit)
-
-        answer_heading = QLabel("MOVIEMIND RESPONSE")
-        answer_heading.setObjectName("eyebrow")
-        side.addWidget(answer_heading)
-        self.answer_area = QTextEdit()
-        self.answer_area.setReadOnly(True)
-        self.answer_area.setPlaceholderText("Choose an action above to get started.")
-        self.answer_area.setMinimumHeight(70)
-        self.answer_area.setMaximumHeight(110)
-        self.answer_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.answer_area.setStyleSheet(
-            "QTextEdit { background:#081526; color:#eaf3ff; border:1px solid #1b3858; "
-            "border-radius:8px; padding:8px; font-size:12px; }"
-        )
-        side.addWidget(self.answer_area)
 
         side.addSpacing(8)
         self.status = QLabel("●  PLAYER READY")
@@ -407,8 +409,19 @@ class MovieMindQtPlayer(QMainWindow):
         else:
             self._ask_ai()
 
+    def _start_online_research(self) -> None:
+        # Keep the UI honest until the legacy online research pipeline is migrated.
+        self.answer_area.setPlainText(
+            "Online Easter-egg research is the next integration step. "
+            "When connected, this mode will show: "
+            "'Thinking online — this can take a little longer than offline mode.'"
+        )
+        self.answer_area.setMinimumHeight(150)
+        self.answer_area.setMaximumHeight(260)
+        self._set_status("ONLINE RESEARCH INTEGRATION PENDING")
+
     def _mode_changed(self, mode: str) -> None:
-        needs_input = mode in ("Ask a question", "Explain a word")
+        needs_input = mode == "Ask a question"
         self.ai_input.setVisible(needs_input)
         self.ai_submit.setVisible(needs_input)
         if mode == "Ask a question":
@@ -419,9 +432,6 @@ class MovieMindQtPlayer(QMainWindow):
             self.ai_input.setPlaceholderText("Enter a word or phrase…")
             self.ai_submit.setText("Explain word")
             self.answer_area.setPlaceholderText("Enter a word or phrase from the movie.")
-        elif mode == "Easter eggs / Hidden details":
-            self.answer_area.setPlainText("Thinking online. This can take a little longer than offline mode…")
-            self._set_status("THINKING ONLINE")
         elif mode == "Explain scene":
             self.answer_area.setPlainText("Analyzing the current frame locally…")
         elif mode == "Explain dialogue":
