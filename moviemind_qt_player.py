@@ -285,10 +285,30 @@ class MovieMindQtPlayer(QMainWindow):
         self.fullscreen_title.hide()
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidepanel")
-        self.sidebar.setFixedWidth(300)
-        side = QVBoxLayout(self.sidebar)
-        side.setContentsMargins(20, 22, 20, 20)
-        side.setSpacing(13)
+        self.sidebar.setFixedWidth(330)
+        sidebar_layout = QVBoxLayout(self.sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
+
+        self.side_scroll = QScrollArea()
+        self.side_scroll.setObjectName("sideScroll")
+        self.side_scroll.setWidgetResizable(True)
+        self.side_scroll.setFrameShape(QFrame.NoFrame)
+        self.side_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.side_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.side_scroll.setStyleSheet(
+            "QScrollArea { background:transparent; border:0; } "
+            "QScrollArea > QWidget > QWidget { background:transparent; }"
+        )
+        sidebar_layout.addWidget(self.side_scroll)
+
+        side_content = QWidget()
+        side_content.setObjectName("sideContent")
+        side_content.setStyleSheet("QWidget#sideContent { background:transparent; }")
+        side = QVBoxLayout(side_content)
+        side.setContentsMargins(18, 18, 18, 18)
+        side.setSpacing(10)
+
         side_eyebrow = QLabel("MOVIEMIND AI")
         side_eyebrow.setObjectName("eyebrow")
         side.addWidget(side_eyebrow)
@@ -300,7 +320,7 @@ class MovieMindQtPlayer(QMainWindow):
         desc.setWordWrap(True)
         side.addWidget(desc)
 
-        side.addSpacing(6)
+        side.addSpacing(4)
         side.addWidget(QLabel("CURRENT MOVIE"))
         self.title_value = QLabel("No movie loaded")
         self.title_value.setWordWrap(True)
@@ -311,23 +331,29 @@ class MovieMindQtPlayer(QMainWindow):
         line.setFrameShape(QFrame.HLine)
         line.setStyleSheet("color:#1b3552;")
         side.addWidget(line)
-        side.addWidget(QLabel("ASSISTANT MODES"))
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems([
-            "Movie overview", "Ask a question", "Explain scene",
-            "Explain dialogue", "Explain a word", "Easter eggs / Hidden details",
-        ])
-        self.mode_combo.setCurrentText("Ask a question")
-        self.mode_combo.currentTextChanged.connect(self._mode_changed)
-        side.addWidget(self.mode_combo)
+        side.addWidget(QLabel("CHOOSE AN ACTION"))
 
-        language_row = QHBoxLayout()
-        language_row.addWidget(QLabel("REPLY LANGUAGE"))
-        self.language_combo = QComboBox()
-        self.language_combo.addItems(["English", "Tamil", "Tanglish"])
-        self.language_combo.currentTextChanged.connect(self._language_changed)
-        language_row.addWidget(self.language_combo, 1)
-        side.addLayout(language_row)
+        self.current_mode = "Ask a question"
+        self.mode_buttons = {}
+        for mode, label, detail in [
+            ("Movie overview", "▣  Movie overview", "Cast, story, runtime and box office"),
+            ("Explain scene", "◉  Explain scene", "Analyze the current frame"),
+            ("Explain dialogue", "❝  Explain dialogue", "Explain the current subtitle"),
+            ("Explain a word", "Aa  Explain a word", "Meaning in the movie context"),
+            ("Easter eggs / Hidden details", "⌕  Hidden details", "Research possible Easter eggs"),
+            ("Ask a question", "✳  Ask a question", "Ask anything about this movie"),
+        ]:
+            tile = QPushButton(label + "\n" + detail)
+            tile.setMinimumHeight(54)
+            tile.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            tile.setStyleSheet(
+                "QPushButton { text-align:left; white-space:normal; background:#10223a; "
+                "border:1px solid #1b3858; border-radius:9px; padding:9px 11px; } "
+                "QPushButton:hover { background:#142d4b; border-color:#348be8; }"
+            )
+            tile.clicked.connect(lambda checked=False, selected=mode: self._select_mode(selected))
+            self.mode_buttons[mode] = tile
+            side.addWidget(tile)
 
         self.ai_input = QLineEdit()
         self.ai_input.setPlaceholderText("Ask about the movie…")
@@ -339,44 +365,47 @@ class MovieMindQtPlayer(QMainWindow):
         self.ai_submit.clicked.connect(self._submit_ai_input)
         side.addWidget(self.ai_submit)
 
+        answer_heading = QLabel("MOVIEMIND RESPONSE")
+        answer_heading.setObjectName("eyebrow")
+        side.addWidget(answer_heading)
         self.answer_area = QTextEdit()
         self.answer_area.setReadOnly(True)
-        self.answer_area.setPlaceholderText("MovieMind's answer will appear here.")
-        self.answer_area.setMinimumHeight(180)
+        self.answer_area.setPlaceholderText("Choose an action above to get started.")
+        self.answer_area.setMinimumHeight(150)
+        self.answer_area.setMaximumHeight(260)
+        self.answer_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.answer_area.setStyleSheet(
             "QTextEdit { background:#081526; color:#eaf3ff; border:1px solid #1b3858; "
             "border-radius:8px; padding:8px; font-size:12px; }"
         )
-        side.addWidget(self.answer_area, 1)
+        side.addWidget(self.answer_area)
 
-        self.mode_buttons = {}
-        for mode, label, detail in [
-            ("Explain scene", "◉  Explain scene", "Analyze the current frame"),
-            ("Explain dialogue", "❝  Explain dialogue", "Explain the current subtitle"),
-            ("Easter eggs / Hidden details", "⌕  Hidden details", "Research possible Easter eggs"),
-            ("Ask a question", "✳  Ask a question", "Ask about the movie"),
-        ]:
-            tile = QPushButton(label + "\n" + detail)
-            tile.setStyleSheet(
-                "QPushButton { text-align:left; white-space:normal; background:#10223a; "
-                "border:1px solid #1b3858; border-radius:9px; padding:9px; } "
-                "QPushButton:hover { background:#142d4b; border-color:#348be8; }"
-            )
-            tile.clicked.connect(lambda checked=False, selected=mode: self._select_mode(selected))
-            self.mode_buttons[mode] = tile
-            side.addWidget(tile)
-
-        side.addStretch()
+        side.addSpacing(8)
         self.status = QLabel("●  PLAYER READY")
         self.status.setObjectName("status")
         side.addWidget(self.status)
+        self.side_scroll.setWidget(side_content)
         content.addWidget(self.sidebar)
 
     def _select_mode(self, mode: str) -> None:
-        if self.mode_combo.currentText() == mode:
+        self.current_mode = mode
+        for selected, button in self.mode_buttons.items():
+            button.setProperty("selected", selected == mode)
+            button.style().unpolish(button)
+            button.style().polish(button)
+        needs_input = mode in ("Ask a question", "Explain a word")
+        self.ai_input.setVisible(needs_input)
+        self.ai_submit.setVisible(needs_input)
+        if mode == "Ask a question":
+            self.ai_input.setPlaceholderText("Ask a question about this movie…")
+            self.ai_submit.setText("Ask MovieMind")
+        elif mode == "Explain a word":
+            self.ai_input.setPlaceholderText("Enter a word or phrase…")
+            self.ai_submit.setText("Explain word")
+        if mode in ("Movie overview", "Explain scene", "Explain dialogue"):
             self._ask_ai()
-        else:
-            self.mode_combo.setCurrentText(mode)
+        elif mode == "Easter eggs / Hidden details":
+            self._mode_changed(mode)
 
     def _mode_changed(self, mode: str) -> None:
         needs_input = mode in ("Ask a question", "Explain a word")
@@ -434,7 +463,7 @@ class MovieMindQtPlayer(QMainWindow):
         self.reply_language = language
 
     def _submit_ai_input(self) -> None:
-        mode = self.mode_combo.currentText()
+        mode = self.current_mode
         if mode in ("Ask a question", "Explain a word") and not self.ai_input.text().strip():
             self.answer_area.setPlainText(
                 "Type a question." if mode == "Ask a question" else "Type the word or phrase to explain."
@@ -525,7 +554,7 @@ class MovieMindQtPlayer(QMainWindow):
         return "Answer in clear, natural English."
 
     def _ask_ai(self) -> None:
-        mode = self.mode_combo.currentText()
+        mode = self.current_mode
         user_input = self.ai_input.text().strip()
         if mode == "Easter eggs / Hidden details":
             self._mode_changed(mode)
