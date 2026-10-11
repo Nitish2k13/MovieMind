@@ -6,10 +6,11 @@ Tkinter application until they can be migrated and tested.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QObject, QEvent
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -74,7 +75,17 @@ class MovieMindQtPlayer(QMainWindow):
         self.current_path: str | None = None
         self.duration_ms = 0
         self.dragging_seek = False
+        self._fullscreen_controls_timer = QTimer(self)
+        self._fullscreen_controls_timer.setSingleShot(True)
+        self._fullscreen_controls_timer.setInterval(2200)
+        self._fullscreen_controls_timer.timeout.connect(self._hide_fullscreen_controls)
         self._build_ui()
+        self.video_surface.setMouseTracking(True)
+        self.video_surface.installEventFilter(self)
+        self.centralWidget().setMouseTracking(True)
+        self.centralWidget().installEventFilter(self)
+        self.deck.setMouseTracking(True)
+        self.deck.installEventFilter(self)
 
         self.instance = None
         self.player = None
@@ -148,6 +159,7 @@ class MovieMindQtPlayer(QMainWindow):
         left.addWidget(self.video_surface, 1)
 
         deck = QFrame()
+        self.deck = deck
         deck.setObjectName("controlDeck")
         deck_layout = QVBoxLayout(deck)
         deck_layout.setContentsMargins(18, 14, 18, 16)
@@ -294,8 +306,9 @@ class MovieMindQtPlayer(QMainWindow):
             if result == -1:
                 raise RuntimeError("VLC could not start playback.")
             self.current_path = path
-            self.title_value.setText(Path(path).name)
-            self.movie_name.setText(Path(path).stem.upper()[:48])
+            clean_title = self._trim_movie_title(path)
+            self.title_value.setText(clean_title)
+            self.movie_name.setText(clean_title.upper()[:48])
             self._set_status("OPENING MOVIE")
             QTimer.singleShot(350, self._reattach_video)
         except Exception as exc:
@@ -420,14 +433,83 @@ class MovieMindQtPlayer(QMainWindow):
     def show_subtitle_menu(self) -> None:
         self._track_menu(self.subtitle_button, "subtitle")
 
+    @staticmethod
+    def _trim_movie_title(path: str) -> str:
+        """Turn noisy release filenames into a readable movie title."""
+        title = Path(path).stem
+        title = re.sub(r"^@?MovieBox[_ .-]*Studios?\s*", "", title, flags=re.I)
+        title = re.sub(r"^@[A-Za-z0-9_.-]+\s+", "", title)
+        title = re.sub(
+            r"(?i)\s+(?:blu[ .-]?ray|web[ .-]?dl|web[ .-]?rip|hdrip|brrip|"
+            r"dvdrip|x264|x265|hevc|1080p|720p|2160p|4k|proper|extended|"
+            r"remux|h\.?264|h\.?265)\b.*$",
+            "", title,
+        )
+        title = re.sub(r"\s*[-_.]+\s*(?:mkv|mp4|avi)$", "", title, flags=re.I)
+        title = re.sub(r"[._]+", " ", title)
+        return re.sub(r"\s+", " ", title).strip(" -_.") or Path(path).stem
+
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
+            self._fullscreen_controls_timer.stop()
+            self.deck.show()
             self.showNormal()
             self.sidebar.show()
         else:
             self.sidebar.hide()
+            self.deck.hide()
             self.showFullScreen()
         QTimer.singleShot(100, self._reattach_video)
+
+    def _show_fullscreen_controls(self) -> None:
+        if not self.isFullScreen():
+            return
+        self.deck.show()
+        self.deck.raise_()
+        self._fullscreen_controls_timer.start()
+
+    def _hide_fullscreen_controls(self) -> None:
+        if self.isFullScreen():
+            self.deck.hide()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.MouseMove and self.isFullScreen():
+            self._show_fullscreen_controls()
+        return super().eventFilter(watched, event)
+
+    def keyPressEvent(self, event) -> None:
+        key = event.key()
+        if key == Qt.Key.Key_Escape and self.isFullScreen():
+            self.toggle_fullscreen()
+            event.accept()
+            return
+        if key == Qt.Key.Key_Space:
+            self.toggle_play()
+            event.accept()
+            return
+        if key == Qt.Key.Key_Left:
+            self.skip(-10)
+            event.accept()
+            return
+        if key == Qt.Key.Key_Right:
+            self.skip(10)
+            event.accept()
+            return
+        if key == Qt.Key.Key_Up:
+            self.volume.setValue(min(100, self.volume.value() + 5))
+            self._set_status(f"VOLUME {self.volume.value()}%")
+            event.accept()
+            return
+        if key == Qt.Key.Key_Down:
+            self.volume.setValue(max(0, self.volume.value() - 5))
+            self._set_status(f"VOLUME {self.volume.value()}%")
+            event.accept()
+            return
+        if key == Qt.Key.Key_F:
+            self.toggle_fullscreen()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def closeEvent(self, event) -> None:
         try:
