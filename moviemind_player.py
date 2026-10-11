@@ -231,12 +231,40 @@ class MovieMindPlayer:
             font=("Segoe UI", 12, "bold"), anchor="w", justify="left"
         )
         self.mode_heading.pack(fill="x", padx=14, pady=(2, 10))
-        self.answer_label = tk.Label(
-            companion, text="Choose a mode, load subtitles for better context, then ask MovieMind.",
-            bg=PANEL, fg=MUTED, wraplength=250, justify="left",
-            font=("Segoe UI", 9), anchor="nw"
+        answer_frame = tk.Frame(companion, bg=PANEL)
+        answer_frame.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+
+        class ScrollableAnswer(tk.Text):
+            """Scrollable answer area compatible with the previous Label-style config calls."""
+            def config(self, cnf=None, **kwargs):
+                text_value = kwargs.pop("text", None)
+                fg_value = kwargs.pop("fg", None)
+                if fg_value is not None:
+                    kwargs["foreground"] = fg_value
+                if text_value is not None:
+                    self.configure(state="normal")
+                    self.delete("1.0", "end")
+                    self.insert("1.0", str(text_value))
+                    self.configure(state="disabled")
+                    self.yview_moveto(0)
+                if cnf is not None or kwargs:
+                    return super().config(cnf, **kwargs)
+                return None
+            configure = config
+
+        self.answer_label = ScrollableAnswer(
+            answer_frame, wrap="word", bg=PANEL, fg=TEXT, insertbackground=TEXT,
+            selectbackground=ACCENT, relief="flat", bd=0, highlightthickness=0,
+            font=("Segoe UI", 10), padx=0, pady=2, spacing1=2, spacing3=4,
+            state="disabled",
         )
-        self.answer_label.pack(fill="both", expand=True, anchor="w", padx=14, pady=(0, 12))
+        answer_scrollbar = tk.Scrollbar(
+            answer_frame, orient="vertical", command=self.answer_label.yview,
+            bg="#252a36", troughcolor=PANEL, activebackground=ACCENT,
+        )
+        self.answer_label.configure(yscrollcommand=answer_scrollbar.set)
+        self.answer_label.pack(side="left", fill="both", expand=True)
+        answer_scrollbar.pack(side="right", fill="y")
 
         self.status_label = tk.Label(
             companion, text="PLAYER READY", bg="#242a38", fg="#c4b5fd",
@@ -902,7 +930,10 @@ class MovieMindPlayer:
         elif mode == "Explain a word":
             self.answer_label.config(text="Enter a word or phrase from the movie.", fg=MUTED)
         elif mode == "Easter eggs / Hidden details":
-            self.answer_label.config(text="Researching visible clues online. This mode requires internet access.", fg=MUTED)
+            self.answer_label.config(
+                text="Easter egg research requires an internet connection. If you're offline, connect to the internet and select this mode again.",
+                fg=MUTED,
+            )
         else:
             self.answer_label.config(text="Ask a general question about the movie. No web search is used.", fg=MUTED)
 
@@ -1233,8 +1264,11 @@ Return only the answer, with no meta commentary.
                 f"Movie: {movie_title}. Inspect this movie frame for up to 4 distinctive, actually visible "
                 "objects, logos, symbols, posters, signs, unusual props, background details, or design motifs "
                 "that could be researched as possible Easter eggs. Ignore subtitles and the player UI. "
-                "Do not guess character identities. Return concise observable clues only, one per line. "
-                "If nothing distinctive is visible, say that. Do not claim a clue is an Easter egg."
+                "Describe colors conservatively: only name a color if it is clearly visible in the supplied frame; "
+                "never call a yellow, amber, warm-white, or gold object blue. If uncertain, say 'lamp with a warm "
+                "yellow shade' or describe shape/material without asserting a color. Do not infer a character, "
+                "location, or Easter egg from a generic object alone. Return concise observable clues only, one "
+                "per line. If nothing distinctive is visible, say that. Do not claim a clue is an Easter egg."
             )
             payload = json.dumps({
                 "model": "gemma3:4b", "prompt": vision_prompt, "images": [image_b64],
