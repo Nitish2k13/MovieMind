@@ -162,6 +162,7 @@ class MovieMindPlayer:
             insertbackground=TEXT, relief="flat", font=("Segoe UI", 10)
         )
         self.question_entry.pack(fill="x", padx=14, pady=(0, 6), ipady=6)
+        self.question_entry.bind("<Return>", self._submit_question)
         self._button(companion, "Ask MovieMind", self.ask_movie).pack(
             anchor="w", padx=14, pady=(0, 8)
         )
@@ -394,7 +395,7 @@ class MovieMindPlayer:
         finally:
             menu.grab_release()
 
-    def show_audio_menu(self) -> None:
+    def show_audio_menu(self, anchor_button=None) -> None:
         menu = tk.Menu(self.root, tearoff=0, bg=PANEL, fg=TEXT,
                        activebackground=ACCENT, activeforeground="white")
         if not self.player or not self.current_path:
@@ -416,7 +417,7 @@ class MovieMindPlayer:
                         )
             except Exception as exc:
                 menu.add_command(label=f"Could not read audio tracks: {exc}", state="disabled")
-        self._show_track_menu(self.audio_button, menu)
+        self._show_track_menu(anchor_button or self.audio_button, menu)
 
     def _select_audio_track(self, track_id: int) -> None:
         if not self.player:
@@ -432,7 +433,7 @@ class MovieMindPlayer:
         except Exception as exc:
             messagebox.showerror("Audio track error", str(exc), parent=self.root)
 
-    def show_subtitle_menu(self) -> None:
+    def show_subtitle_menu(self, anchor_button=None) -> None:
         menu = tk.Menu(self.root, tearoff=0, bg=PANEL, fg=TEXT,
                        activebackground=ACCENT, activeforeground="white")
         if not self.player or not self.current_path:
@@ -463,7 +464,7 @@ class MovieMindPlayer:
             except Exception as exc:
                 menu.add_command(label=f"Could not read subtitle tracks: {exc}", state="disabled")
                 menu.add_command(label="Load external subtitle file…", command=self.open_subtitle)
-        self._show_track_menu(self.subtitle_button, menu)
+        self._show_track_menu(anchor_button or self.subtitle_button, menu)
 
     def _select_subtitle_track(self, track_id: int) -> None:
         if not self.player:
@@ -618,6 +619,12 @@ class MovieMindPlayer:
                     "text": text,
                 })
         return records
+
+    def _submit_question(self, _event=None) -> str:
+        self.ask_movie()
+        # Return submits the question and returns keyboard control to the player.
+        self.root.after(100, self.video_frame.focus_set)
+        return "break"
 
     def ask_movie(self) -> None:
         question = self.question_var.get().strip()
@@ -853,8 +860,15 @@ class MovieMindPlayer:
             side="left", padx=(8, 0)
         )
         self._button(actions, "+10s", lambda: self.seek_by(10)).pack(side="left", padx=(8, 0))
-        self._button(actions, "Audio ▾", self.show_audio_menu).pack(side="left", padx=(8, 0))
-        self._button(actions, "Subtitles ▾", self.show_subtitle_menu).pack(side="left", padx=(8, 0))
+        self._overlay_audio_button = self._button(
+            actions, "Audio ▾", lambda: self.show_audio_menu(self._overlay_audio_button)
+        )
+        self._overlay_audio_button.pack(side="left", padx=(8, 0))
+        self._overlay_subtitle_button = self._button(
+            actions, "Subtitles ▾",
+            lambda: self.show_subtitle_menu(self._overlay_subtitle_button)
+        )
+        self._overlay_subtitle_button.pack(side="left", padx=(8, 0))
         self._button(actions, "Exit Fullscreen", self.toggle_fullscreen).pack(
             side="right"
         )
@@ -1041,17 +1055,21 @@ class MovieMindPlayer:
                     self.toggle_fullscreen()
                 elif 0x20 in pressed and not text_focused:
                     self.toggle_play()
-                elif not text_focused:
-                    if 0x25 in pressed:
-                        self.seek_by(-5)
-                    if 0x27 in pressed:
-                        self.seek_by(5)
-                    if 0x26 in pressed:
-                        self.change_volume(5)
-                    if 0x28 in pressed:
-                        self.change_volume(-5)
-                    if 0x4F in pressed and (ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000):
-                        self.open_file()
+                else:
+                    # While editing a question/title, Space and arrows must remain
+                    # ordinary text-editing keys. Enter submits the question and
+                    # returns focus to the video for media shortcuts.
+                    if not text_focused:
+                        if 0x25 in pressed:
+                            self.seek_by(-5)
+                        if 0x27 in pressed:
+                            self.seek_by(5)
+                        if 0x26 in pressed:
+                            self.change_volume(5)
+                        if 0x28 in pressed:
+                            self.change_volume(-5)
+                        if 0x4F in pressed and (ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000):
+                            self.open_file()
         except Exception:
             pass
         if not getattr(self, "_closing", False):
@@ -1066,7 +1084,7 @@ class MovieMindPlayer:
         return bool(focused and focused.winfo_class() in ("Entry", "Text", "TEntry"))
 
     def _space_shortcut(self, event=None) -> str:
-        # Preserve normal spaces while typing in title/question fields.
+        # Space remains a normal character while editing a text field.
         if self._is_text_entry_focused():
             return None
         self.toggle_play()
