@@ -787,6 +787,7 @@ Return only the answer, with no meta commentary.
         request_context = {
             "mode": mode, "question": question_for_memory,
             "language": language, "time": clock(current_ms),
+            "visual_frames": self._recent_visual_images(2) if mode in ("Explain scene", "Explain dialogue") else [],
         }
         self.ai_request_running = True
         self.ai_submit.setEnabled(False)
@@ -805,8 +806,8 @@ Return only the answer, with no meta commentary.
                 "model": "gemma3:4b", "prompt": prompt, "stream": False,
                 "keep_alive": "30m", "options": {"temperature": 0.15, "num_predict": 220},
             }
+            visual_images = request_context.get("visual_frames", [])
             if snapshot_path:
-                import time
                 for _ in range(15):
                     if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
                         break
@@ -814,6 +815,8 @@ Return only the answer, with no meta commentary.
                 if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
                     with open(snapshot_path, "rb") as image_file:
                         request_data["images"] = [base64.b64encode(image_file.read()).decode("ascii")]
+            if visual_images:
+                request_data["images"] = request_data.get("images", []) + visual_images[-2:]
             payload = json.dumps(request_data).encode("utf-8")
             request = urllib.request.Request(
                 "http://localhost:11434/api/generate", data=payload,
@@ -954,6 +957,167 @@ Return only the answer, with no meta commentary.
             if length:
                 target = min(target, length)
             self.player.set_time(target)
+
+    @staticmethod
+    def _visual_signature(image) -> str:
+        small = image.convert("L").resize((32, 18))
+        pixels = list(small.getdata())
+        average = sum(pixels) / max(1, len(pixels))
+        return bytes(max(0, min(255, int(pixel - average + 128))) for pixel in pixels).hex()
+
+    @staticmethod
+    def _visual_difference(signature_a: str, signature_b: str) -> float:
+        if not signature_a or not signature_b:
+            return 1.0
+        try:
+            a, b = bytes.fromhex(signature_a), bytes.fromhex(signature_b)
+        except ValueError:
+            return 1.0
+        if not a or len(a) != len(b):
+            return 1.0
+        return sum(abs(x - y) for x, y in zip(a, b)) / (255 * len(a))
+
+    def _sample_visual_memory(self) -> None:
+        """Request one lightweight VLC frame sample per second; no AI inference runs here."""
+        if not self.player or not self.current_path or self._visual_sample_in_flight:
+            return
+        try:
+            if self.player.get_state() != vlc.State.Playing:
+                return
+        except Exception:
+            return
+        path = str(Path(tempfile.gettempdir()) / f"moviemind_memory_{uuid.uuid4().hex}.png")
+        try:
+            result = self.player.video_take_snapshot(0, path, 0, 0)
+            if result == -1:
+                return
+        except Exception:
+            return
+        self._visual_sample_in_flight = True
+        threading.Thread(target=self._process_visual_memory_snapshot, args=(path,), daemon=True).start()
+
+    def _process_visual_memory_snapshot(self, path: str) -> None:
+        try:
+            # LibVLC writes the snapshot asynchronously.
+            for _ in range(8):
+                if os.path.exists(path) and os.path.getsize(path) > 0:
+                    break
+                time.sleep(0.08)
+            if not Image or not os.path.exists(path) or os.path.getsize(path) <= 0:
+                return
+            with Image.open(path) as source:
+                image = source.convert("RGB")
+            now = time.monotonic()
+            thumbnail = image.copy()
+            thumbnail.thumbnail((480, 270), Image.Resampling.LANCZOS)
+            signature = self._visual_signature(thumbnail)
+            frame_difference = self._visual_difference(signature, self._visual_last_signature)
+
+            subtitle = self._visual_last_subtitle
+            subtitle_region = image.crop((0, int(image.height * 0.65), image.width, int(image.height * 0.96)))
+            subtitle_signature = self._visual_signature(subtitle_region)
+            subtitle_changed_visually = (
+                not self._visual_last_subtitle_signature
+                or self._visual_difference(subtitle_signature, self._visual_last_subtitle_signature) >= 0.012
+            )
+            if pytesseract and (
+                subtitle_changed_visually or now - self._visual_last_subtitle_ocr >= 3.0
+            ):
+                try:
+                    subtitle = re.sub(
+                        r"\s+", " ",
+                        pytesseract.image_to_string(
+                            subtitle_region, lang="eng", config="--psm 6"
+                        )
+                    ).strip()[:350]
+                except Exception:
+                    # Tesseract is optional; visual sampling still works without OCR.
+                    pass
+                self._visual_last_subtitle_ocr = now
+
+            full_text = ""
+            full_ocr_due = (
+                not self._visual_last_full_ocr
+                or (frame_difference >= 0.045 and now - self._visual_last_full_ocr >= 8.0)
+                or now - self._visual_last_full_ocr >= 20.0
+            )
+            if pytesseract and full_ocr_due:
+                try:
+                    small = image.copy()
+                    small.thumbnail((960, 540), Image.Resampling.LANCZOS)
+                    full_text = re.sub(
+                        r"\s+", " ",
+                        pytesseract.image_to_string(small, lang="eng", config="--psm 11")
+                    ).strip()[:500]
+                except Exception:
+                    pass
+                self._visual_last_full_ocr = now
+
+            subtitle_changed = subtitle != self._visual_last_subtitle
+            should_store = (
+                not self._visual_last_signature
+                or frame_difference >= 0.055
+                or subtitle_changed
+                or bool(full_text)
+                or now - self._visual_last_saved >= 5.0
+            )
+            if should_store:
+                buffer = BytesIO()
+                thumbnail.save(buffer, format="JPEG", quality=45, optimize=True)
+                try:
+                    position_ms = max(0, self.player.get_time()) if self.player else 0
+                except Exception:
+                    position_ms = 0
+                record = {
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    "position_ms": position_ms,
+                    "signature": signature,
+                    "subtitle": subtitle,
+                    "full_frame_text": full_text,
+                    "image_jpeg": buffer.getvalue(),
+                }
+                with self._visual_memory_lock:
+                    self.visual_memory.append(record)
+                self._visual_last_saved = now
+
+            self._visual_last_signature = signature
+            self._visual_last_subtitle_signature = subtitle_signature
+            self._visual_last_subtitle = subtitle
+        except Exception as exc:
+            print(f"[MovieMind visual memory] {type(exc).__name__}: {exc}")
+        finally:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+            self._visual_sample_in_flight = False
+
+    def _build_visual_memory_context(self) -> str:
+        with self._visual_memory_lock:
+            records = list(self.visual_memory)[-12:]
+        if not records:
+            return "No automatic visual samples recorded yet."
+        lines = []
+        for item in records:
+            timestamp = item.get("timestamp", "unknown")
+            position = clock(int(item.get("position_ms", 0)))
+            subtitle = str(item.get("subtitle", "")).strip() or "(no subtitle OCR)"
+            text = str(item.get("full_frame_text", "")).strip()
+            line = f"[wall time {timestamp}; movie time {position}] Subtitle OCR: {subtitle}"
+            if text:
+                line += f" | Other visible text OCR: {text[:180]}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    def _recent_visual_images(self, limit: int = 2) -> list[str]:
+        """Return at most two compact earlier frames from this movie session."""
+        with self._visual_memory_lock:
+            records = list(self.visual_memory)[-limit:]
+        return [
+            base64.b64encode(item["image_jpeg"]).decode("ascii")
+            for item in records if item.get("image_jpeg")
+        ]
 
     def _refresh_position(self) -> None:
         if not self.player or not self.current_path:
@@ -1299,6 +1463,8 @@ Return only the answer, with no meta commentary.
         try:
             if hasattr(self, "timer"):
                 self.timer.stop()
+            if hasattr(self, "_visual_monitor"):
+                self._visual_monitor.stop()
             if self.player:
                 self.player.stop()
                 self.player.release()
