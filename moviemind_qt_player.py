@@ -1180,9 +1180,11 @@ Return only the answer, with no meta commentary.
                 self._fullscreen_controls_timer.stop()
                 self.deck.hide()
                 self.fullscreen_overlay.hide()
+                self.fullscreen_title.hide()
         elif event.type() == QEvent.Type.WindowActivate and watched is self:
             if self.isFullScreen():
                 self._last_cursor_pos = QCursor.pos()
+                self._position_fullscreen_title()
         if self.isFullScreen() and self.isActiveWindow() and event.type() in (QEvent.Type.MouseMove, QEvent.Type.Enter):
             if event.type() == QEvent.Type.Enter:
                 if watched is self.fullscreen_overlay:
