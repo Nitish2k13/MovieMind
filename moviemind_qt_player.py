@@ -339,9 +339,8 @@ class MovieMindQtPlayer(QMainWindow):
             ("Movie overview", "▣  Movie overview", "Cast, story, runtime and box office"),
             ("Explain scene", "◉  Explain scene", "Analyze the current frame"),
             ("Explain dialogue", "❝  Explain dialogue", "Explain the current subtitle"),
-            ("Explain a word", "Aa  Explain a word", "Meaning in the movie context"),
-            ("Easter eggs / Hidden details", "⌕  Hidden details", "Research possible Easter eggs"),
-            ("Ask a question", "✳  Ask a question", "Ask anything about this movie"),
+            ("Ask a question", "✳  Ask any question", "Ask about this movie"),
+            ("Easter eggs / Hidden details", "⌕  Hidden details · ONLINE", "Online research; may take longer"),
         ]:
             tile = QPushButton(label + "\n" + detail)
             tile.setMinimumHeight(54)
@@ -349,14 +348,15 @@ class MovieMindQtPlayer(QMainWindow):
             tile.setStyleSheet(
                 "QPushButton { text-align:left; white-space:normal; background:#10223a; "
                 "border:1px solid #1b3858; border-radius:9px; padding:9px 11px; } "
-                "QPushButton:hover { background:#142d4b; border-color:#348be8; }"
+                "QPushButton:hover { background:#142d4b; border-color:#348be8; } "
+                "QPushButton[selected=\"true\"] { background:#16365a; border-color:#348be8; }"
             )
             tile.clicked.connect(lambda checked=False, selected=mode: self._select_mode(selected))
             self.mode_buttons[mode] = tile
             side.addWidget(tile)
 
         self.ai_input = QLineEdit()
-        self.ai_input.setPlaceholderText("Ask about the movie…")
+        self.ai_input.setPlaceholderText("Ask a question about this movie…")
         self.ai_input.returnPressed.connect(self._submit_ai_input)
         self.ai_input.hide()
         side.addWidget(self.ai_input)
@@ -373,8 +373,8 @@ class MovieMindQtPlayer(QMainWindow):
         self.answer_area = QTextEdit()
         self.answer_area.setReadOnly(True)
         self.answer_area.setPlaceholderText("Choose an action above to get started.")
-        self.answer_area.setMinimumHeight(150)
-        self.answer_area.setMaximumHeight(260)
+        self.answer_area.setMinimumHeight(70)
+        self.answer_area.setMaximumHeight(110)
         self.answer_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.answer_area.setStyleSheet(
             "QTextEdit { background:#081526; color:#eaf3ff; border:1px solid #1b3858; "
@@ -395,19 +395,17 @@ class MovieMindQtPlayer(QMainWindow):
             button.setProperty("selected", selected == mode)
             button.style().unpolish(button)
             button.style().polish(button)
-        needs_input = mode in ("Ask a question", "Explain a word")
+        needs_input = mode == "Ask a question"
         self.ai_input.setVisible(needs_input)
         self.ai_submit.setVisible(needs_input)
         if mode == "Ask a question":
             self.ai_input.setPlaceholderText("Ask a question about this movie…")
             self.ai_submit.setText("Ask MovieMind")
-        elif mode == "Explain a word":
-            self.ai_input.setPlaceholderText("Enter a word or phrase…")
-            self.ai_submit.setText("Explain word")
-        if mode in ("Movie overview", "Explain scene", "Explain dialogue"):
-            self._ask_ai()
+            self.ai_input.setFocus()
         elif mode == "Easter eggs / Hidden details":
-            self._mode_changed(mode)
+            self._start_online_research()
+        else:
+            self._ask_ai()
 
     def _mode_changed(self, mode: str) -> None:
         needs_input = mode in ("Ask a question", "Explain a word")
@@ -422,11 +420,8 @@ class MovieMindQtPlayer(QMainWindow):
             self.ai_submit.setText("Explain word")
             self.answer_area.setPlaceholderText("Enter a word or phrase from the movie.")
         elif mode == "Easter eggs / Hidden details":
-            self.answer_area.setPlainText(
-                "Easter-egg research uses a separate online research pipeline. "
-                "That pipeline is being migrated separately; the legacy implementation remains unchanged."
-            )
-            self._set_status("EASTER EGG MIGRATION PENDING")
+            self.answer_area.setPlainText("Thinking online. This can take a little longer than offline mode…")
+            self._set_status("THINKING ONLINE")
         elif mode == "Explain scene":
             self.answer_area.setPlainText("Analyzing the current frame locally…")
         elif mode == "Explain dialogue":
@@ -717,7 +712,7 @@ Return only the answer, with no meta commentary.
         }
         self.ai_request_running = True
         self.ai_submit.setEnabled(False)
-        self.answer_area.setPlainText("Thinking locally with Gemma 3…")
+        self.answer_area.setPlainText("Thinking locally in offline mode…")
         self._set_status("ASKING LOCAL AI")
         threading.Thread(
             target=self._run_local_ai,
@@ -771,9 +766,13 @@ Return only the answer, with no meta commentary.
         self.ai_submit.setEnabled(True)
         if error:
             self.answer_area.setPlainText(error)
+            self.answer_area.setMinimumHeight(150)
+            self.answer_area.setMaximumHeight(260)
             self._set_status("LOCAL AI UNAVAILABLE")
             return
         self.answer_area.setPlainText(result)
+        self.answer_area.setMinimumHeight(190)
+        self.answer_area.setMaximumHeight(320)
         self._set_status("ANSWER READY")
         self.recent_qa_memory.append({
             "time": context.get("time", "unknown"),
