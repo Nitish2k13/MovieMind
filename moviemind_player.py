@@ -175,7 +175,7 @@ class MovieMindPlayer:
         self.mode_var = tk.StringVar(value="Ask a question")
         self.mode_menu = tk.OptionMenu(
             companion, self.mode_var,
-            "Movie overview", "Ask a question", "Explain scene", "Explain dialogue", "Explain a word",
+            "Movie overview", "Ask a question", "Explain scene", "Explain dialogue", "Explain a word", "Easter eggs / Hidden details",
             command=self._mode_changed,
         )
         self.mode_menu.config(
@@ -901,12 +901,14 @@ class MovieMindPlayer:
             self.answer_label.config(text="MovieMind will explain the current subtitle/dialogue locally.", fg=MUTED)
         elif mode == "Explain a word":
             self.answer_label.config(text="Enter a word or phrase from the movie.", fg=MUTED)
+        elif mode == "Easter eggs / Hidden details":
+            self.answer_label.config(text="Researching visible clues online. This mode requires internet access.", fg=MUTED)
         else:
             self.answer_label.config(text="Ask a general question about the movie. No web search is used.", fg=MUTED)
 
         # Modes without a text field should run as soon as the user selects them.
         # Input-based modes intentionally wait for the user to type and submit.
-        if mode in ("Movie overview", "Explain scene", "Explain dialogue"):
+        if mode in ("Movie overview", "Explain scene", "Explain dialogue", "Easter eggs / Hidden details"):
             self.root.after_idle(self.ask_movie)
 
     def _current_subtitle(self, current_ms: int) -> str:
@@ -1001,6 +1003,9 @@ SOURCE ANSWER:
             self.answer_label.config(text="Open a movie and check its title first.", fg=MUTED)
             return
         if self.ai_request_running:
+            return
+        if mode == "Easter eggs / Hidden details":
+            self._start_easter_egg_research()
             return
 
         try:
@@ -1172,6 +1177,146 @@ Return only the answer, with no meta commentary.
             args=(prompt, snapshot_path, request_context),
             daemon=True,
         ).start()
+
+    def _start_easter_egg_research(self) -> None:
+        """Capture the current frame, search for clue-specific references, and synthesize locally."""
+        if not self.movie_title:
+            self.answer_label.config(text="Open a movie and check its title first.", fg=MUTED)
+            return
+        if not self.player or not self.current_path:
+            self.answer_label.config(text="Open a movie before researching Easter eggs.", fg=MUTED)
+            return
+        import tempfile
+        import uuid
+        import threading
+
+        snapshot_path = str(Path(tempfile.gettempdir()) / f"moviemind_easteregg_{uuid.uuid4().hex}.png")
+        try:
+            self.player.video_take_snapshot(0, snapshot_path, 0, 0)
+        except Exception as exc:
+            self.answer_label.config(text=f"Could not capture the current frame: {exc}", fg="#fca5a5")
+            return
+        self._pending_snapshot_paths.add(snapshot_path)
+        self.ai_request_running = True
+        self.answer_label.config(
+            text="Inspecting the current frame and researching possible Easter eggs online…",
+            fg="#c4b5fd",
+        )
+        self.status_label.config(text="EASTER EGG RESEARCH…", fg="#c4b5fd")
+        threading.Thread(
+            target=self._run_easter_egg_research,
+            args=(snapshot_path, self.movie_title, self.reply_language),
+            daemon=True,
+        ).start()
+
+    def _run_easter_egg_research(self, snapshot_path: str, movie_title: str, language: str) -> None:
+        import base64
+        import json
+        import re
+        import time
+        import urllib.parse
+        import urllib.request
+        import urllib.error
+
+        result = None
+        error = None
+        try:
+            for _ in range(20):
+                if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
+                    break
+                time.sleep(0.1)
+            if not os.path.exists(snapshot_path) or os.path.getsize(snapshot_path) == 0:
+                raise RuntimeError("The player did not produce a readable frame. Try again.")
+            with open(snapshot_path, "rb") as frame_file:
+                image_b64 = base64.b64encode(frame_file.read()).decode("ascii")
+            vision_prompt = (
+                f"Movie: {movie_title}. Inspect this movie frame for up to 4 distinctive, actually visible "
+                "objects, logos, symbols, posters, signs, unusual props, background details, or design motifs "
+                "that could be researched as possible Easter eggs. Ignore subtitles and the player UI. "
+                "Do not guess character identities. Return concise observable clues only, one per line. "
+                "If nothing distinctive is visible, say that. Do not claim a clue is an Easter egg."
+            )
+            payload = json.dumps({
+                "model": "gemma3:4b", "prompt": vision_prompt, "images": [image_b64],
+                "stream": False, "keep_alive": "30m",
+                "options": {"temperature": 0.1, "num_predict": 160, "num_ctx": 2048},
+            }).encode("utf-8")
+            request = urllib.request.Request(
+                "http://localhost:11434/api/generate", data=payload,
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=120) as response:
+                clues = json.loads(response.read().decode("utf-8")).get("response", "").strip()
+            if not clues:
+                clues = "No distinctive clue could be identified confidently from this frame."
+            query = urllib.parse.quote(f'"{movie_title}" visual Easter eggs props symbols ' + " ".join(clues.split()[:18]))
+            search_url = "https://html.duckduckgo.com/html/?q=" + query
+            search_req = urllib.request.Request(
+                search_url, headers={"User-Agent": "Mozilla/5.0 (compatible; MovieMind/1.0)"},
+            )
+            try:
+                with urllib.request.urlopen(search_req, timeout=10) as response:
+                    html = response.read().decode("utf-8", errors="replace")
+                blocks = re.findall(
+                    r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?'
+                    r'<(?:a|div)[^>]+class="result__snippet"[^>]*>(.*?)</(?:a|div)>',
+                    html, flags=re.I | re.S,
+                )
+                snippets = []
+                for url, title_html, snippet_html in blocks[:6]:
+                    clean = lambda value: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
+                    snippets.append(f"Title: {clean(title_html)}\nURL: {url}\nSnippet: {clean(snippet_html)}")
+                web_evidence = "\n\n".join(snippets) or "No usable web results were returned by the search provider."
+            except Exception as exc:
+                web_evidence = f"Online search could not be completed: {type(exc).__name__}: {exc}"
+            synthesis_prompt = (
+                f"You are MovieMind's Easter egg researcher. Reply in {language}. Movie: {movie_title}.\n"
+                f"VISIBLE CLUES FROM THE FRAME (model-generated, may be wrong):\n{clues}\n\n"
+                f"WEB SEARCH RESULTS (unverified snippets):\n{web_evidence}\n\n"
+                "Give up to 4 concise findings. For each, state OBSERVED CLUE, POSSIBLE CONNECTION, "
+                "EVIDENCE and STATUS (CONFIRMED only if a result explicitly supports this exact clue in "
+                "this movie; otherwise POSSIBLE or NOT VERIFIED). Cite search result URLs or titles in text. "
+                "Do not invent hidden details or say generic franchise pages prove a specific Easter egg. "
+                "If evidence is weak, say so and still explain what is visibly distinctive. If no clues are "
+                "visible, ask the user to try another frame. Keep it concise."
+            )
+            payload = json.dumps({
+                "model": "gemma3:4b", "prompt": synthesis_prompt, "stream": False,
+                "keep_alive": "30m",
+                "options": {"temperature": 0.1, "num_predict": 240, "num_ctx": 2048},
+            }).encode("utf-8")
+            request = urllib.request.Request(
+                "http://localhost:11434/api/generate", data=payload,
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=120) as response:
+                result = json.loads(response.read().decode("utf-8")).get("response", "").strip()
+            if not result:
+                result = f"Visible candidates:\n{clues}\n\nResearch did not return a final summary."
+        except urllib.error.URLError as exc:
+            error = f"Could not reach local Ollama or the web search service: {exc}"
+        except Exception as exc:
+            error = f"Easter egg research failed: {exc}"
+        finally:
+            try:
+                if os.path.exists(snapshot_path):
+                    os.remove(snapshot_path)
+            except OSError:
+                pass
+            self._pending_snapshot_paths.discard(snapshot_path)
+
+        def finish() -> None:
+            self.ai_request_running = False
+            if error:
+                self.answer_label.config(text=error, fg="#fca5a5")
+                self.status_label.config(text="EASTER EGG RESEARCH FAILED", fg="#fca5a5")
+            else:
+                self.answer_label.config(text=result or "No result returned.", fg=TEXT)
+                self.status_label.config(text="ONLINE EASTER EGG RESEARCH COMPLETE", fg="#86efac")
+        try:
+            self.root.after(0, finish)
+        except tk.TclError:
+            pass
 
     def _run_local_ai(
         self,
