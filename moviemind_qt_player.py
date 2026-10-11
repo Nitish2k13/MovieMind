@@ -489,7 +489,14 @@ class MovieMindQtPlayer(QMainWindow):
         # to display the track list.
         self._track_menu_open = True
         self._fullscreen_controls_timer.stop()
-        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+        menu.ensurePolished()
+        popup_pos = button.mapToGlobal(button.rect().bottomLeft())
+        screen = button.screen() if hasattr(button, "screen") else None
+        if screen is not None:
+            available = screen.availableGeometry()
+            if popup_pos.y() + menu.sizeHint().height() > available.bottom():
+                popup_pos.setY(button.mapToGlobal(button.rect().topLeft()).y() - menu.sizeHint().height())
+        menu.exec(popup_pos)
         self._track_menu_open = False
         if self.isFullScreen():
             self._fullscreen_controls_timer.start(5000)
@@ -566,9 +573,11 @@ class MovieMindQtPlayer(QMainWindow):
             self.fullscreen_title.hide()
             self.showFullScreen()
             self._position_fullscreen_overlay()
+            # Keep the panel and its child deck hidden until the cursor enters
+            # the bottom zone. Showing a child of a hidden tool window is flaky
+            # on Windows and can leave it detached from the visible panel.
+            self.deck.hide()
             self.fullscreen_overlay.hide()
-            self.deck.show()
-            self.deck.raise_()
             self.video_surface.setFocus()
         self.update()
 
@@ -605,7 +614,8 @@ class MovieMindQtPlayer(QMainWindow):
             self._last_cursor_pos = current
             return
         local = self.mapFromGlobal(current)
-        in_bottom_zone = local.y() >= self.height() - 170
+        pointer_inside_player = self.rect().contains(local)
+        in_bottom_zone = pointer_inside_player and local.y() >= self.height() - 170
         overlay_local = self.fullscreen_overlay.mapFromGlobal(current)
         over_deck = self.deck.isVisible() and self.deck.geometry().contains(overlay_local)
         moved = current != self._last_cursor_pos
@@ -615,6 +625,7 @@ class MovieMindQtPlayer(QMainWindow):
         if in_bottom_zone and (moved or not self.fullscreen_overlay.isVisible()):
             self._show_fullscreen_controls()
         elif over_deck and moved:
+            # Hide five seconds after the last pointer movement over the controls.
             self._fullscreen_controls_timer.start(5000)
 
     def _show_fullscreen_controls(self) -> None:
@@ -623,13 +634,14 @@ class MovieMindQtPlayer(QMainWindow):
         was_hidden = not self.fullscreen_overlay.isVisible()
         if was_hidden:
             self._position_fullscreen_overlay()
+            self.deck.hide()
             self.fullscreen_overlay.show()
             self.fullscreen_overlay.raise_()
             self.deck.show()
             self.deck.raise_()
-            # Start the five-second timeout only once when controls first appear.
-            # Repeated mouse-move events must not keep resetting the timeout.
-            self._fullscreen_controls_timer.start(5000)
+        # Restart on reveal or user movement: hide after five seconds without
+        # movement, unless a track menu is currently open.
+        self._fullscreen_controls_timer.start(5000)
 
     def _hide_fullscreen_controls(self) -> None:
         if self.isFullScreen() and not self._track_menu_open:
@@ -646,15 +658,17 @@ class MovieMindQtPlayer(QMainWindow):
                 self._last_cursor_pos = QCursor.pos()
         if self.isFullScreen() and self.isActiveWindow() and event.type() in (QEvent.Type.MouseMove, QEvent.Type.Enter):
             if event.type() == QEvent.Type.Enter:
-                self._show_fullscreen_controls()
+                if watched is self.fullscreen_overlay:
+                    self._show_fullscreen_controls()
             else:
                 if watched is self.fullscreen_overlay:
                     local_pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-                    y = local_pos.y()
+                    if self.fullscreen_overlay.rect().contains(local_pos):
+                        self._show_fullscreen_controls()
                 else:
-                    y = self.mapFromGlobal(QCursor.pos()).y()
-                if y >= self.height() - 170:
-                    self._show_fullscreen_controls()
+                    local_pos = self.mapFromGlobal(QCursor.pos())
+                    if self.rect().contains(local_pos) and local_pos.y() >= self.height() - 170:
+                        self._show_fullscreen_controls()
         return super().eventFilter(watched, event)
 
     def keyPressEvent(self, event) -> None:
