@@ -117,6 +117,7 @@ class MovieMindQtPlayer(QMainWindow):
         self._visual_monitor.timeout.connect(self._sample_visual_memory)
         self._visual_monitor.start()
         self._pending_snapshot_paths: set[str] = set()
+        self._language_refresh_pending = False
         self.ai_bridge = AIResultBridge(self)
         self.ai_bridge.finished.connect(self._finish_ai_request)
         self.duration_ms = 0
@@ -321,7 +322,7 @@ class MovieMindQtPlayer(QMainWindow):
         self.fullscreen_title.setStyleSheet(
             "QLabel { background:rgba(7,17,31,220); color:#eaf3ff; "
             "border:1px solid #28496e; border-radius:6px; "
-            "padding:2px 5px; font-size:12px; font-weight:600; }"
+            "padding:0px 3px; font-size:13px; font-weight:700; }"
         )
         self.fullscreen_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.fullscreen_title.hide()
@@ -527,7 +528,25 @@ class MovieMindQtPlayer(QMainWindow):
             QMessageBox.critical(self, "Subtitle error", str(exc))
 
     def _language_changed(self, language: str) -> None:
+        if language == self.reply_language:
+            return
         self.reply_language = language
+        if not self.movie_title or not self.current_path:
+            self._set_status(f"REPLY LANGUAGE: {language.upper()}")
+            return
+        if self.current_mode == "Easter eggs / Hidden details":
+            self.answer_area.setPlainText(
+                f"Language switched to {language}. Run the hidden-details search again to request its results in this language."
+            )
+            self._set_status(f"LANGUAGE SWITCHED TO {language.upper()}")
+            return
+        self.answer_area.setPlainText(f"Switching response language to {language}…")
+        self._set_status(f"SWITCHING LANGUAGE TO {language.upper()}")
+        if self.ai_request_running:
+            self._language_refresh_pending = True
+            return
+        self._language_refresh_pending = False
+        self._ask_ai()
 
     def _submit_ai_input(self) -> None:
         mode = self.current_mode
@@ -877,6 +896,12 @@ Return only the answer, with no meta commentary.
     def _finish_ai_request(self, result: str, error: str, context: object) -> None:
         self.ai_request_running = False
         self.ai_submit.setEnabled(True)
+        if self._language_refresh_pending and context.get("language") != self.reply_language:
+            self._language_refresh_pending = False
+            self.answer_area.setPlainText(f"Switching response language to {self.reply_language}…")
+            self._set_status(f"SWITCHING LANGUAGE TO {self.reply_language.upper()}")
+            QTimer.singleShot(0, self._ask_ai)
+            return
         if error:
             self.answer_area.setPlainText(error)
             self.answer_area.setMinimumHeight(150)
@@ -1359,10 +1384,11 @@ Return only the answer, with no meta commentary.
         if not self.isFullScreen() or not self.movie_title:
             self.fullscreen_title.hide()
             return
-        width = min(440, max(220, self.width() // 3))
-        height = 42
-        top_left = self.mapToGlobal(self.rect().topLeft())
         self.fullscreen_title.setText(self.movie_title)
+        self.fullscreen_title.adjustSize()
+        width = min(440, max(1, self.fullscreen_title.fontMetrics().horizontalAdvance(self.movie_title) + 18))
+        height = 32
+        top_left = self.mapToGlobal(self.rect().topLeft())
         self.fullscreen_title.setGeometry(
             top_left.x() + self.width() - width - 24,
             top_left.y() + 18,
