@@ -77,6 +77,8 @@ class MovieMindQtPlayer(QMainWindow):
         self.dragging_seek = False
         self._pending_seek_ms: int | None = None
         self._pending_seek_checks = 0
+        self._was_maximized_before_fullscreen = False
+        self._normal_geometry_before_fullscreen = None
         self._fullscreen_controls_timer = QTimer(self)
         self._fullscreen_controls_timer.setSingleShot(True)
         self._fullscreen_controls_timer.setInterval(2200)
@@ -506,42 +508,65 @@ class MovieMindQtPlayer(QMainWindow):
 
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
+            # Restore the exact window mode the user had before fullscreen.
+            was_maximized = self._was_maximized_before_fullscreen
+            normal_geometry = self._normal_geometry_before_fullscreen
             self._fullscreen_controls_timer.stop()
             self.fullscreen_overlay.hide()
             self.deck.hide()
-            self.deck.setParent(None)
+            self.deck.setParent(self.centralWidget())
             self.left_layout.addWidget(self.deck)
-            self.showNormal()
             self.outer_layout.setContentsMargins(24, 18, 24, 22)
             self.header.show()
             self.sidebar.show()
+            self.showNormal()
+            if was_maximized:
+                self.showMaximized()
+            elif normal_geometry is not None:
+                self.setGeometry(normal_geometry)
             self.deck.show()
+            self._was_maximized_before_fullscreen = False
+            self._normal_geometry_before_fullscreen = None
             self.setFocus()
+            QTimer.singleShot(0, self._restore_layout_after_fullscreen)
         else:
+            self._was_maximized_before_fullscreen = self.isMaximized()
+            self._normal_geometry_before_fullscreen = self.normalGeometry()
+            self._fullscreen_controls_timer.stop()
             self.outer_layout.setContentsMargins(0, 0, 0, 0)
             self.header.hide()
             self.sidebar.hide()
             self.left_layout.removeWidget(self.deck)
+            self.deck.hide()
             self.deck.setParent(self.fullscreen_overlay)
-            self.deck.show()
+            self.deck.setGeometry(24, max(0, self.height() - 136), max(300, self.width() - 48), 112)
             self.fullscreen_title.setText(self.title_value.text())
             self.fullscreen_title.show() if self.current_path else self.fullscreen_title.hide()
             self.showFullScreen()
-            self._position_fullscreen_overlay()
+            self.fullscreen_overlay.setGeometry(self.geometry())
             self.fullscreen_overlay.show()
             self.fullscreen_overlay.raise_()
+            self._position_fullscreen_overlay()
             self.deck.hide()
             self.video_surface.setFocus()
+        self.update()
+
+    def _restore_layout_after_fullscreen(self) -> None:
+        # Let Qt finish the window-state transition before recalculating layouts.
+        self.centralWidget().updateGeometry()
+        self.centralWidget().layout().activate()
+        self.left_layout.activate()
+        self.updateGeometry()
         self.update()
 
     def _position_fullscreen_overlay(self) -> None:
         if not self.isFullScreen():
             return
         top_left = self.mapToGlobal(self.rect().topLeft())
-        self.fullscreen_overlay.setGeometry(
-            top_left.x(), top_left.y(), self.width(), self.height()
-        )
-        self.fullscreen_overlay.raise_()
+        wanted_geometry = (top_left.x(), top_left.y(), self.width(), self.height())
+        current_geometry = self.fullscreen_overlay.geometry()
+        if (current_geometry.x(), current_geometry.y(), current_geometry.width(), current_geometry.height()) != wanted_geometry:
+            self.fullscreen_overlay.setGeometry(*wanted_geometry)
         margin = 24
         height = min(112, max(88, self.height() // 7))
         self.deck.setGeometry(
@@ -578,10 +603,14 @@ class MovieMindQtPlayer(QMainWindow):
     def _show_fullscreen_controls(self) -> None:
         if not self.isFullScreen():
             return
-        self.fullscreen_overlay.show()
-        self._position_fullscreen_overlay()
-        self.deck.show()
-        self.deck.raise_()
+        # Do not repeatedly raise the top-level overlay while the pointer moves:
+        # doing so can steal clicks from buttons and their popup menus on Windows.
+        if not self.fullscreen_overlay.isVisible():
+            self.fullscreen_overlay.show()
+            self._position_fullscreen_overlay()
+            self.fullscreen_overlay.raise_()
+        if not self.deck.isVisible():
+            self.deck.show()
         self._fullscreen_controls_timer.start()
 
     def _hide_fullscreen_controls(self) -> None:
@@ -590,7 +619,9 @@ class MovieMindQtPlayer(QMainWindow):
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Type.MouseMove and self.isFullScreen():
-            self._show_fullscreen_controls()
+            local_pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            if local_pos.y() >= self.height() - 170:
+                self._show_fullscreen_controls()
         return super().eventFilter(watched, event)
 
     def keyPressEvent(self, event) -> None:
