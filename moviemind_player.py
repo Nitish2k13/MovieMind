@@ -104,6 +104,8 @@ class MovieMindPlayer:
         self.root.bind_all("<Right>", self._shortcut_right, add="+")
         self.root.bind_all("<Up>", self._shortcut_up, add="+")
         self.root.bind_all("<Down>", self._shortcut_down, add="+")
+        # Clicking outside text inputs immediately restores media keyboard shortcuts.
+        self.root.bind_all("<Button-1>", self._handle_global_click, add="+")
         # Dismiss audio/subtitle track menus when the user clicks elsewhere.
         self.root.bind_all("<Button-1>", self._dismiss_track_popup_on_click, add="+")
         self.root.bind_all("<Motion>", self._fullscreen_mouse_motion, add="+")
@@ -825,6 +827,18 @@ class MovieMindPlayer:
                 })
         return records
 
+    def _handle_global_click(self, event=None) -> None:
+        """Enable media shortcuts on any click outside editable text controls."""
+        widget = getattr(event, "widget", None)
+        try:
+            widget_class = widget.winfo_class() if widget is not None else ""
+        except tk.TclError:
+            widget_class = ""
+        if widget_class in ("Entry", "Text", "TEntry"):
+            self._keyboard_media_mode = False
+        else:
+            self._keyboard_media_mode = True
+
     def _question_typing_started(self, _event=None) -> None:
         self._keyboard_media_mode = False
 
@@ -1222,7 +1236,7 @@ Return only the answer, with no meta commentary.
                 if display_result:
                     # Keep model output readable in a plain Tk label; remove Markdown markers.
                     import re
-                    display_result = re.sub(r"\\*\\*(.*?)\\*\\*", r"\\1", display_result)
+                    display_result = re.sub(r"\\*\\*(.*?)\\*\\*", r"\1", display_result)
                     display_result = re.sub(r"(?m)^\\s*[-*]\\s+", "• ", display_result)
                 if error:
                     self.answer_label.config(text=error, fg="#fca5a5")
