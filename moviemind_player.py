@@ -392,52 +392,59 @@ class MovieMindPlayer:
             return value.decode("utf-8", errors="replace")
         return str(value)
 
-    def _show_track_menu(self, button, menu) -> None:
-        # Native Tk menus can render transparent behind an always-on-top overlay
-        # on Windows. Use an ordinary Toplevel popup with real buttons instead.
-        try:
-            menu.destroy()
-        except Exception:
-            pass
-        if self._track_popup is not None:
+    def _show_track_menu(self, button, menu=None) -> None:
+        # Keep the track picker inside the always-on-top fullscreen overlay.
+        # A separate Toplevel was layered underneath the overlay on Windows,
+        # making the menu appear transparent and intercepting clicks incorrectly.
+        if menu is not None:
             try:
-                self._track_popup.destroy()
-            except tk.TclError:
+                menu.destroy()
+            except Exception:
                 pass
-        popup = tk.Toplevel(self.root)
-        self._track_popup = popup
-        popup.overrideredirect(True)
-        popup.attributes("-topmost", True)
-        popup.configure(bg="#202634", highlightthickness=1, highlightbackground="#596174")
-        x = button.winfo_rootx()
-        y = button.winfo_rooty() - 8
-        popup.update_idletasks()
-        rows = []
-        # The track choices are assembled by the caller and attached temporarily.
+        self._close_track_popup()
         choices = getattr(button, "_moviemind_choices", [])
+        parent = self._fullscreen_overlay if self.fullscreen else self.root
+        popup = tk.Frame(
+            parent, bg="#202634", highlightthickness=1,
+            highlightbackground="#596174", bd=0
+        )
+        self._track_popup = popup
         for label, command, enabled in choices:
             item = tk.Button(
-                popup, text=label, command=lambda action=command: self._run_track_choice(action),
+                popup, text=label,
+                command=lambda action=command: self._run_track_choice(action),
                 anchor="w", bg="#202634", fg=TEXT if enabled else MUTED,
-                activebackground=ACCENT, activeforeground="white", relief="flat",
-                bd=0, padx=12, pady=7, state="normal" if enabled else "disabled"
+                activebackground=ACCENT, activeforeground="white",
+                relief="flat", bd=0, padx=12, pady=7,
+                state="normal" if enabled else "disabled"
             )
             item.pack(fill="x")
         popup.update_idletasks()
         width = max(button.winfo_width(), popup.winfo_reqwidth())
         height = popup.winfo_reqheight()
-        screen_w = popup.winfo_screenwidth()
-        screen_h = popup.winfo_screenheight()
-        x = max(0, min(x, screen_w - width))
-        if y + height > screen_h:
-            y = max(0, button.winfo_rooty() - height)
+        if self.fullscreen:
+            bx = button.winfo_x()
+            by = button.winfo_y()
+            overlay_h = max(1, parent.winfo_height())
+            px = max(0, min(bx, parent.winfo_width() - width))
+            py = by - height - 6
+            if py < 0:
+                py = max(0, overlay_h - height - 166)
+            popup.place(x=px, y=py, width=width)
+            popup.lift()
         else:
+            x = button.winfo_rootx()
             y = button.winfo_rooty() + button.winfo_height()
-        popup.geometry(f"{width}x{height}+{x}+{max(0,y)}")
-        popup.bind("<Escape>", lambda _e: self._close_track_popup(), add="+")
-        popup.bind("<FocusOut>", self._track_popup_focus_out, add="+")
-        popup.focus_force()
-
+            screen_w = popup.winfo_screenwidth()
+            screen_h = popup.winfo_screenheight()
+            x = max(0, min(x, screen_w - width))
+            if y + height > screen_h:
+                y = max(0, button.winfo_rooty() - height)
+            popup.place_forget()
+            popup.place(in_=parent, x=x-parent.winfo_rootx(), y=y-parent.winfo_rooty(), width=width)
+            popup.lift()
+        for widget in (popup, *popup.winfo_children()):
+            widget.bind("<Escape>", lambda _e: self._close_track_popup(), add="+")
     def _run_track_choice(self, command) -> None:
         self._close_track_popup()
         command()
@@ -1066,10 +1073,11 @@ class MovieMindPlayer:
                 pass
 
     def _overlay_set_volume(self, value: str) -> None:
-        self._set_volume(value)
+        target = max(0, min(100, int(float(value))))
+        self._set_volume(str(target))
         if hasattr(self, "volume_scale"):
-            self.volume_scale.set(value)
-        self._show_fullscreen_osd(f"Volume  {int(float(value))}%")
+            self.volume_scale.set(target)
+        self._show_fullscreen_osd(f"Volume  {target}%")
 
     def _show_fullscreen_osd(self, message: str) -> None:
         if not self.fullscreen:
@@ -1113,14 +1121,26 @@ class MovieMindPlayer:
             # Only act when MovieMind is the foreground app; don't hijack keys
             # while the user is working in another application.
             foreground = ctypes.windll.user32.GetForegroundWindow()
-            own_window = int(self.root.winfo_id())
-            # On Windows, compare foreground top-level to Tk's top-level HWND.
+            # Compare top-level ancestor HWNDs. VLC's video child and the
+            # fullscreen overlay/popup can become the foreground HWND themselves.
             try:
-                own_window = int(self.root.winfo_toplevel().winfo_id())
-                own_window = int(ctypes.windll.user32.GetAncestor(own_window, 2)) or own_window
+                ga_root = 2
+                foreground_root = int(ctypes.windll.user32.GetAncestor(foreground, ga_root)) or foreground
+                root_hwnd = int(self.root.winfo_id())
+                root_hwnd = int(ctypes.windll.user32.GetAncestor(root_hwnd, ga_root)) or root_hwnd
+                overlay_hwnd = 0
+                if self._fullscreen_overlay is not None and self._fullscreen_overlay.winfo_exists():
+                    overlay_hwnd = int(self._fullscreen_overlay.winfo_id())
+                    overlay_hwnd = int(ctypes.windll.user32.GetAncestor(overlay_hwnd, ga_root)) or overlay_hwnd
+                popup_hwnd = 0
+                if self._track_popup is not None and self._track_popup.winfo_exists():
+                    popup_hwnd = int(self._track_popup.winfo_id())
+                    popup_hwnd = int(ctypes.windll.user32.GetAncestor(popup_hwnd, ga_root)) or popup_hwnd
+                app_roots = {root_hwnd, overlay_hwnd, popup_hwnd}
             except Exception:
-                pass
-            if foreground == own_window:
+                foreground_root = foreground
+                app_roots = {int(self.root.winfo_id())}
+            if foreground in app_roots or foreground_root in app_roots:
                 text_focused = self._is_text_entry_focused() and not self._keyboard_media_mode
                 if 0x1B in pressed and self.fullscreen:
                     self.toggle_fullscreen()
