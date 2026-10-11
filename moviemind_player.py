@@ -99,6 +99,8 @@ class MovieMindPlayer:
         self.root.bind_all("<Right>", self._shortcut_right, add="+")
         self.root.bind_all("<Up>", self._shortcut_up, add="+")
         self.root.bind_all("<Down>", self._shortcut_down, add="+")
+        # Dismiss audio/subtitle track menus when the user clicks elsewhere.
+        self.root.bind_all("<Button-1>", self._dismiss_track_popup_on_click, add="+")
         self.root.bind_all("<Motion>", self._fullscreen_mouse_motion, add="+")
         self.root.bind_all("<Configure>", self._fullscreen_geometry_changed, add="+")
         # VLC's native Windows child window can take keyboard focus away from Tk.
@@ -371,11 +373,30 @@ class MovieMindPlayer:
             messagebox.showerror("Subtitle error", str(exc), parent=self.root)
 
     def _set_volume(self, value: str) -> None:
+        """Apply volume and keep normal/fullscreen sliders showing one value."""
+        try:
+            target = max(0, min(100, int(float(value))))
+        except (TypeError, ValueError):
+            return
+
         if self.player:
             try:
-                self.player.audio_set_volume(max(0, min(100, int(float(value)))))
+                self.player.audio_set_volume(target)
             except Exception:
                 pass
+
+        # Updating a Scale programmatically does not require switching layouts.
+        # Guard against callbacks recursively re-entering this method.
+        self._syncing_volume = True
+        try:
+            scale = getattr(self, "volume_scale", None)
+            if scale is not None and int(scale.get()) != target:
+                scale.set(target)
+            overlay_scale = getattr(self, "_overlay_volume", None)
+            if overlay_scale is not None and int(overlay_scale.get()) != target:
+                overlay_scale.set(target)
+        finally:
+            self._syncing_volume = False
 
     def change_volume(self, delta: int) -> str:
         """Change volume from keyboard shortcuts: Up/Down = +/- 5%."""
@@ -477,6 +498,30 @@ class MovieMindPlayer:
             except tk.TclError:
                 pass
         self._track_popup = None
+
+    def _dismiss_track_popup_on_click(self, event=None) -> None:
+        """Close the track picker on outside clicks, but keep menu clicks alive."""
+        popup = self._track_popup
+        if popup is None or event is None:
+            return
+        widget = event.widget
+        # Clicks on a menu item or inside the popup should not dismiss it before
+        # the item's command has run.
+        current = widget
+        while current is not None:
+            if current is popup:
+                return
+            try:
+                current = current.master
+            except Exception:
+                current = None
+
+        # Clicking an audio/subtitle trigger replaces/toggles the menu itself.
+        trigger_names = ("audio_button", "subtitle_button",
+                         "_overlay_audio_button", "_overlay_subtitle_button")
+        if any(widget is getattr(self, name, None) for name in trigger_names):
+            return
+        self._close_track_popup()
 
     def _track_popup_focus_out(self, _event=None) -> None:
         # Delay closing slightly so a clicked choice can execute reliably.
@@ -1114,10 +1159,10 @@ class MovieMindPlayer:
                 pass
 
     def _overlay_set_volume(self, value: str) -> None:
+        if getattr(self, "_syncing_volume", False):
+            return
         target = max(0, min(100, int(float(value))))
         self._set_volume(str(target))
-        if hasattr(self, "volume_scale"):
-            self.volume_scale.set(target)
         self._show_fullscreen_osd(f"Volume  {target}%")
 
     def _show_fullscreen_osd(self, message: str) -> None:
