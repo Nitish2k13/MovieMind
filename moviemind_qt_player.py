@@ -90,6 +90,7 @@ class MovieMindQtPlayer(QMainWindow):
         self._cursor_poll.timeout.connect(self._poll_fullscreen_cursor)
         self._cursor_poll.start()
         self._build_ui()
+        self.installEventFilter(self)
         self.video_surface.setMouseTracking(True)
         self.video_surface.installEventFilter(self)
         self.centralWidget().setMouseTracking(True)
@@ -250,6 +251,7 @@ class MovieMindQtPlayer(QMainWindow):
             self, Qt.Tool | Qt.FramelessWindowHint
         )
         self.fullscreen_overlay.setAttribute(Qt.WA_NativeWindow, True)
+        self.fullscreen_overlay.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.fullscreen_overlay.setAttribute(Qt.WA_StyledBackground, True)
         self.fullscreen_overlay.setStyleSheet(
             "background:#0c1a2d; border:1px solid #1b385a; border-radius:12px;"
