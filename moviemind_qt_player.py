@@ -15,7 +15,7 @@ from PySide6.QtGui import QAction, QKeySequence, QCursor
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QMenu, QMessageBox, QPushButton, QSizePolicy, QSlider, QVBoxLayout,
-    QWidget,
+    QWidget, QFrame,
 )
 
 try:
@@ -168,14 +168,6 @@ class MovieMindQtPlayer(QMainWindow):
 
         self.video_surface = QFrame()
         self.video_surface.setObjectName("surface")
-        self.fullscreen_title = QLabel("", self.video_surface)
-        self.fullscreen_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.fullscreen_title.setStyleSheet(
-            "QLabel { color:#EAF3FF; background:rgba(5,15,29,220); "
-            "border:1px solid #376BA3; border-radius:9px; "
-            "padding:8px 13px; font-size:12px; font-weight:700; }"
-        )
-        self.fullscreen_title.hide()
         self.video_surface.setMinimumSize(560, 320)
         self.video_surface.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video_surface.setStyleSheet("background:#02060c; border:1px solid #1b3552; border-radius:14px;")
@@ -244,6 +236,23 @@ class MovieMindQtPlayer(QMainWindow):
         deck_layout.addLayout(controls)
         left.addWidget(deck)
 
+        # A separate transparent top-level overlay is required because VLC's
+        # native video child window can paint above ordinary Qt child widgets.
+        self.fullscreen_overlay = QWidget(
+            self, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+        )
+        self.fullscreen_overlay.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.fullscreen_overlay.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.fullscreen_overlay.setStyleSheet("background: transparent;")
+        self.fullscreen_title = QLabel("", self.fullscreen_overlay)
+        self.fullscreen_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.fullscreen_title.setStyleSheet(
+            "QLabel { color:#EAF3FF; background:#08172B; "
+            "border:1px solid #376BA3; border-radius:9px; "
+            "padding:8px 13px; font-size:12px; font-weight:700; }"
+        )
+        self.fullscreen_title.hide()
+        self.deck.hide()
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidepanel")
         self.sidebar.setFixedWidth(300)
@@ -476,10 +485,10 @@ class MovieMindQtPlayer(QMainWindow):
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
             self._fullscreen_controls_timer.stop()
+            self.fullscreen_overlay.hide()
             self.deck.hide()
             self.deck.setParent(None)
             self.left_layout.addWidget(self.deck)
-            self.fullscreen_title.hide()
             self.showNormal()
             self.outer_layout.setContentsMargins(24, 18, 24, 22)
             self.header.show()
@@ -491,38 +500,38 @@ class MovieMindQtPlayer(QMainWindow):
             self.header.hide()
             self.sidebar.hide()
             self.left_layout.removeWidget(self.deck)
-            self.deck.setParent(self.video_surface)
-            self.deck.setGeometry(self._overlay_deck_geometry())
-            self.deck.hide()
-            self.fullscreen_title.show()
-            self._position_fullscreen_title()
+            self.deck.setParent(self.fullscreen_overlay)
+            self.deck.show()
+            self.fullscreen_title.setText(self.title_value.text())
+            self.fullscreen_title.show() if self.current_path else self.fullscreen_title.hide()
             self.showFullScreen()
+            self._position_fullscreen_overlay()
+            self.fullscreen_overlay.show()
+            self.fullscreen_overlay.raise_()
+            self.deck.hide()
             self.video_surface.setFocus()
         self.update()
 
-    def _position_fullscreen_title(self) -> None:
-        if not self.current_path:
-            self.fullscreen_title.hide()
+    def _position_fullscreen_overlay(self) -> None:
+        if not self.isFullScreen():
             return
-        self.fullscreen_title.adjustSize()
-        width = min(self.fullscreen_title.sizeHint().width(), max(220, self.video_surface.width() - 32))
-        self.fullscreen_title.setGeometry(self.video_surface.width() - width - 24, 20, width, 38)
-        self.fullscreen_title.raise_()
-
-    def _overlay_deck_geometry(self):
-        margin = 22
-        height = min(112, max(88, self.video_surface.height() // 7))
-        return self.video_surface.rect().adjusted(
-            margin, self.video_surface.height() - height - margin,
-            -margin, -margin
+        self.fullscreen_overlay.setGeometry(self.rect())
+        self.fullscreen_overlay.raise_()
+        margin = 24
+        height = min(112, max(88, self.height() // 7))
+        self.deck.setGeometry(
+            margin, self.height() - height - margin,
+            max(300, self.width() - 2 * margin), height
         )
+        self.fullscreen_title.adjustSize()
+        title_width = min(self.fullscreen_title.sizeHint().width(), max(220, self.width() - 32))
+        self.fullscreen_title.setGeometry(self.width() - title_width - 24, 20, title_width, 38)
+        self.fullscreen_title.raise_()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if self.isFullScreen():
-            if self.deck.parent() is self.video_surface:
-                self.deck.setGeometry(self._overlay_deck_geometry())
-            self._position_fullscreen_title()
+            self._position_fullscreen_overlay()
 
     def _poll_fullscreen_cursor(self) -> None:
         if not self.isFullScreen():
@@ -531,7 +540,15 @@ class MovieMindQtPlayer(QMainWindow):
         current = QCursor.pos()
         if current != self._last_cursor_pos:
             self._last_cursor_pos = current
-            self._show_fullscreen_controls()
+            local = self.mapFromGlobal(current)
+            # Reveal controls only when the pointer reaches the bottom control zone,
+            # or while already interacting with the overlay deck.
+            in_bottom_zone = local.y() >= self.height() - 170
+            over_deck = self.deck.isVisible() and self.deck.geometry().contains(
+                self.fullscreen_overlay.mapFromGlobal(current)
+            )
+            if in_bottom_zone or over_deck:
+                self._show_fullscreen_controls()
 
     def _show_fullscreen_controls(self) -> None:
         if not self.isFullScreen():
