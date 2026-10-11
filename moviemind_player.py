@@ -423,8 +423,10 @@ class MovieMindPlayer:
         width = max(button.winfo_width(), popup.winfo_reqwidth())
         height = popup.winfo_reqheight()
         if self.fullscreen:
-            bx = button.winfo_x()
-            by = button.winfo_y()
+            # Button coordinates must be converted from screen space to the
+            # overlay's coordinate space (the button lives inside a child frame).
+            bx = button.winfo_rootx() - parent.winfo_rootx()
+            by = button.winfo_rooty() - parent.winfo_rooty()
             overlay_h = max(1, parent.winfo_height())
             px = max(0, min(bx, parent.winfo_width() - width))
             py = by - height - 6
