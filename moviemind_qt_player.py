@@ -320,8 +320,8 @@ class MovieMindQtPlayer(QMainWindow):
         self.fullscreen_title.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.fullscreen_title.setStyleSheet(
             "QLabel { background:rgba(7,17,31,220); color:#eaf3ff; "
-            "border:1px solid #28496e; border-radius:8px; "
-            "padding:7px 12px; font-size:13px; font-weight:700; }"
+            "border:1px solid #28496e; border-radius:6px; "
+            "padding:2px 5px; font-size:12px; font-weight:600; }"
         )
         self.fullscreen_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.fullscreen_title.hide()
@@ -766,8 +766,11 @@ class MovieMindQtPlayer(QMainWindow):
             question_for_memory = user_input
 
         language = self.reply_language
+        language_instruction = self._language_instruction(language)
         prompt = f"""You are MovieMind, a local movie companion running on the user's computer.
-{self._language_instruction(language)}
+MANDATORY RESPONSE LANGUAGE: {language}
+{language_instruction}
+The response must be entirely in the selected response language, except movie titles, names, and unavoidable technical terms. This rule applies to every mode, including Movie overview, Explain scene, Explain dialogue, Explain a word, and Ask a question. Do not default to English when Tamil or Tanglish is selected.
 
 MOVIE: {self.movie_title}
 PLAYBACK TIME: {clock(current_ms)}
@@ -799,6 +802,8 @@ OFFLINE AND EVIDENCE RULES:
 
 TASK:
 {task}
+
+FINAL LANGUAGE CHECK: Before answering, ensure the complete response follows the selected language instruction above. For Tamil, use Tamil Unicode script. For Tanglish, use colloquial Tamil written only with Latin letters. For English, use English.
 
 Return only the answer, with no meta commentary.
 """
@@ -881,12 +886,15 @@ Return only the answer, with no meta commentary.
         if context.get("mode") == "Movie overview":
             authoritative_runtime = str(context.get("authoritative_runtime", "")).strip()
             if authoritative_runtime and authoritative_runtime != "Unavailable from the media player":
-                runtime_line = f"**Runtime:** {authoritative_runtime}"
+                runtime_line = f"Runtime: {authoritative_runtime}"
                 runtime_pattern = re.compile(r"(?im)^\s*(?:\*\*)?runtime(?:\*\*)?\s*:\s*.*$")
                 if runtime_pattern.search(result):
                     result = runtime_pattern.sub(runtime_line, result, count=1)
                 else:
                     result = runtime_line + "\n" + result
+        # Render model output as clean plain text; do not show Markdown decoration such as **bold**.
+        result = re.sub(r"(?<!\\*)\\*\\*(.*?)\\*\\*(?!\\*)", r"\\1", result)
+        result = re.sub(r"(?m)^\\s*#{1,6}\\s+", "", result)
         self.answer_area.setPlainText(result)
         self.answer_area.setMinimumHeight(190)
         self.answer_area.setMaximumHeight(320)
