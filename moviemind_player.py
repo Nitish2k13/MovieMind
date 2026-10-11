@@ -80,13 +80,12 @@ class MovieMindPlayer:
 
         if vlc is not None:
             try:
-                # Prefer the Windows multimedia audio output explicitly and
-                # disable D3D11 hardware decoding for stability on this prototype.
-                # The previous default produced audio-output failures and timestamp
-                # errors on the user's Intel Iris Xe setup.
+                # Let LibVLC choose the Windows audio output automatically.
+                # Forcing --aout=mmdevice caused audio initialization failures
+                # ("too low audio sample frequency (0)") on some systems.
+                # Keep hardware decoding disabled for the current stability workaround.
                 self.instance = vlc.Instance(
                     "--no-video-title-show",
-                    "--aout=mmdevice",
                     "--avcodec-hw=none",
                 )
                 self.player = self.instance.media_player_new()
