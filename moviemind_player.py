@@ -1123,26 +1123,15 @@ class MovieMindPlayer:
             # Only act when MovieMind is the foreground app; don't hijack keys
             # while the user is working in another application.
             foreground = ctypes.windll.user32.GetForegroundWindow()
-            # Compare top-level ancestor HWNDs. VLC's video child and the
-            # fullscreen overlay/popup can become the foreground HWND themselves.
-            try:
-                ga_root = 2
-                foreground_root = int(ctypes.windll.user32.GetAncestor(foreground, ga_root)) or foreground
-                root_hwnd = int(self.root.winfo_id())
-                root_hwnd = int(ctypes.windll.user32.GetAncestor(root_hwnd, ga_root)) or root_hwnd
-                overlay_hwnd = 0
-                if self._fullscreen_overlay is not None and self._fullscreen_overlay.winfo_exists():
-                    overlay_hwnd = int(self._fullscreen_overlay.winfo_id())
-                    overlay_hwnd = int(ctypes.windll.user32.GetAncestor(overlay_hwnd, ga_root)) or overlay_hwnd
-                popup_hwnd = 0
-                if self._track_popup is not None and self._track_popup.winfo_exists():
-                    popup_hwnd = int(self._track_popup.winfo_id())
-                    popup_hwnd = int(ctypes.windll.user32.GetAncestor(popup_hwnd, ga_root)) or popup_hwnd
-                app_roots = {root_hwnd, overlay_hwnd, popup_hwnd}
-            except Exception:
-                foreground_root = foreground
-                app_roots = {int(self.root.winfo_id())}
-            if foreground in app_roots or foreground_root in app_roots:
+            # Compare process IDs instead of Tk HWNDs. VLC's native video child,
+            # Tk Toplevel overlays, and popup windows can each become foreground;
+            # they still belong to this app process.
+            foreground_pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(
+                foreground, ctypes.byref(foreground_pid)
+            )
+            app_is_foreground = foreground_pid.value == os.getpid()
+            if app_is_foreground:
                 text_focused = self._is_text_entry_focused() and not self._keyboard_media_mode
                 if 0x1B in pressed and self.fullscreen:
                     self.toggle_fullscreen()
@@ -1179,8 +1168,9 @@ class MovieMindPlayer:
         return bool(focused and focused.winfo_class() in ("Entry", "Text", "TEntry"))
 
     def _space_shortcut(self, event=None) -> str:
-        # Space remains a normal character while editing a text field.
-        if self._is_text_entry_focused():
+        # The Windows key poll is authoritative for VLC's native child window.
+        # Tk's event path must not double-toggle playback.
+        if self._is_text_entry_focused() and not self._keyboard_media_mode:
             return None
         self.toggle_play()
         return "break"
