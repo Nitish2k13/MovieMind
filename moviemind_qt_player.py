@@ -358,11 +358,13 @@ class MovieMindQtPlayer(QMainWindow):
         self.ai_input = QLineEdit()
         self.ai_input.setPlaceholderText("Ask about the movie…")
         self.ai_input.returnPressed.connect(self._submit_ai_input)
+        self.ai_input.hide()
         side.addWidget(self.ai_input)
 
         self.ai_submit = QPushButton("Ask MovieMind")
         self.ai_submit.setObjectName("primary")
         self.ai_submit.clicked.connect(self._submit_ai_input)
+        self.ai_submit.hide()
         side.addWidget(self.ai_submit)
 
         answer_heading = QLabel("MOVIEMIND RESPONSE")
