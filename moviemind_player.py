@@ -295,9 +295,10 @@ class MovieMindPlayer:
 
         self.seek_scale = tk.Scale(
             controls, from_=0, to=1000, orient="horizontal", showvalue=False,
-            resolution=1, bg=BG, fg=TEXT, troughcolor="#1C3555",
-            activebackground=ACCENT_HOVER, highlightthickness=0, bd=0,
-            command=self._seek_changed
+            resolution=1, bg=BG, fg=TEXT, troughcolor="#203B5D",
+            activebackground=ACCENT_HOVER, width=4, sliderlength=18,
+            sliderrelief="flat", relief="flat", borderwidth=0,
+            highlightthickness=0, command=self._seek_changed
         )
         self.seek_scale.pack(side="left", fill="x", expand=True, padx=(0, 12))
         self.seek_scale.bind("<ButtonPress-1>", self._begin_seek)
@@ -319,9 +320,10 @@ class MovieMindPlayer:
         tk.Label(buttons, text="Volume", bg=BG, fg=MUTED).pack(side="left", padx=(20, 6))
         self.volume_scale = tk.Scale(
             buttons, from_=0, to=100, orient="horizontal", showvalue=True,
-            length=135, bg=BG, fg=TEXT, troughcolor="#34394a",
-            activebackground=ACCENT, highlightthickness=0, bd=0,
-            command=self._set_volume
+            length=135, width=4, sliderlength=16, sliderrelief="flat",
+            bg=BG, fg=TEXT, troughcolor="#203B5D",
+            activebackground=ACCENT_HOVER, highlightthickness=0, bd=0,
+            relief="flat", borderwidth=0, command=self._set_volume
         )
         self.volume_scale.set(80)
         self.volume_scale.pack(side="left")
@@ -1683,45 +1685,49 @@ Return only the answer, with no meta commentary.
         overlay = tk.Toplevel(self.root)
         overlay.overrideredirect(True)
         overlay.attributes("-topmost", True)
-        overlay.configure(bg="#08172A")
+        overlay.configure(bg="#07111F")
         try:
-            overlay.attributes("-alpha", 0.94)
+            overlay.attributes("-alpha", 0.97)
         except tk.TclError:
             pass
         self._fullscreen_overlay = overlay
 
-        top = tk.Frame(overlay, bg="#11141d")
-        top.pack(fill="x", padx=14, pady=(8, 2))
+        # Cinematic glass-like control deck: restrained blue, generous spacing,
+        # and a clean progress rail rather than the default chunky Tk scale.
+        top = tk.Frame(overlay, bg="#0D1B2E", highlightthickness=1, highlightbackground="#1D3A5C")
+        top.pack(fill="x", padx=18, pady=(12, 0))
         self._overlay_osd = tk.Label(
-            top, text="", bg="#11141d", fg="#ffffff",
-            font=("Segoe UI", 11, "bold"), anchor="e"
+            top, text="", bg="#0D1B2E", fg="#DCEBFF",
+            font=("Segoe UI Semibold", 10), anchor="e"
         )
-        self._overlay_osd.pack(side="right")
+        self._overlay_osd.pack(side="right", padx=(8, 14), pady=8)
         self._overlay_volume = tk.Scale(
-            top, from_=0, to=100, orient="horizontal", showvalue=True,
-            length=130, bg="#11141d", fg="#ffffff", troughcolor="#3a4052",
-            activebackground=ACCENT, highlightthickness=0, bd=0,
-            command=self._overlay_set_volume
+            top, from_=0, to=100, orient="horizontal", showvalue=False,
+            length=120, width=4, sliderlength=16, sliderrelief="flat",
+            bg="#0D1B2E", fg="#DCEBFF", troughcolor="#29415F",
+            activebackground=ACCENT_HOVER, highlightthickness=0, bd=0,
+            relief="flat", borderwidth=0, command=self._overlay_set_volume
         )
         self._overlay_volume.set(self.volume_scale.get())
-        self._overlay_volume.pack(side="right", padx=(8, 14))
-        tk.Label(top, text="VOLUME", bg="#11141d", fg="#A9C4E8",
-                 font=("Segoe UI", 8, "bold")).pack(side="right")
+        self._overlay_volume.pack(side="right", padx=(8, 10), pady=4)
+        tk.Label(top, text="VOLUME", bg="#0D1B2E", fg="#8EACD0",
+                 font=("Segoe UI Semibold", 8)).pack(side="right", pady=8)
 
-        bottom = tk.Frame(overlay, bg="#11141d")
-        bottom.pack(fill="x", padx=14, pady=(2, 10))
+        bottom = tk.Frame(overlay, bg="#0D1B2E", highlightthickness=1, highlightbackground="#1D3A5C")
+        bottom.pack(fill="x", padx=18, pady=(0, 0))
         self._overlay_time = tk.Label(
-            bottom, text="00:00 / 00:00", bg="#11141d", fg="#e5e7eb",
-            font=("Consolas", 9), width=15
+            bottom, text="00:00 / 00:00", bg="#0D1B2E", fg="#C7D9F2",
+            font=("Segoe UI Semibold", 9), width=15
         )
-        self._overlay_time.pack(side="left", padx=(0, 10))
+        self._overlay_time.pack(side="left", padx=(14, 8), pady=(5, 0))
         self._overlay_seek = tk.Scale(
             bottom, from_=0, to=1000, orient="horizontal", showvalue=False,
-            resolution=1, bg="#11141d", fg=TEXT, troughcolor="#3a4052",
-            activebackground=ACCENT, highlightthickness=0, bd=0,
-            command=self._overlay_seek_changed
+            resolution=1, width=4, sliderlength=18, sliderrelief="flat",
+            bg="#0D1B2E", fg=TEXT, troughcolor="#29415F",
+            activebackground=ACCENT_HOVER, highlightthickness=0, bd=0,
+            relief="flat", borderwidth=0, command=self._overlay_seek_changed
         )
-        self._overlay_seek.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self._overlay_seek.pack(side="left", fill="x", expand=True, padx=(0, 14), pady=(4, 0))
         self._overlay_seek.bind("<ButtonPress-1>", self._begin_seek)
         self._overlay_seek.bind("<ButtonRelease-1>", self._end_overlay_seek)
 
@@ -1762,7 +1768,7 @@ Return only the answer, with no meta commentary.
             if not overlay.winfo_exists():
                 return
             width = max(640, self.root.winfo_width())
-            height = 166
+            height = 178
             x = self.root.winfo_rootx()
             y = self.root.winfo_rooty() + max(0, self.root.winfo_height() - height)
             overlay.geometry(f"{width}x{height}+{x}+{y}")
