@@ -1558,6 +1558,11 @@ Return only the answer, with no meta commentary.
                 vk for vk in keys
                 if ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000
             }
+            # Detect clicks at the Windows level too: clicks on VLC's native video
+            # child do not always reach Tk's bind_all handlers, leaving Entry focus stale.
+            left_mouse_down = bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
+            mouse_pressed = left_mouse_down and not getattr(self, "_left_mouse_was_down", False)
+            self._left_mouse_was_down = left_mouse_down
             pressed = current_down - self._keys_down
             self._keys_down = current_down
             # Only act when MovieMind is the foreground app; don't hijack keys
@@ -1572,6 +1577,23 @@ Return only the answer, with no meta commentary.
             )
             app_is_foreground = foreground_pid.value == os.getpid()
             if app_is_foreground:
+                if mouse_pressed:
+                    # Resolve the native Windows control under the cursor. Edit controls
+                    # retain typing mode; any other MovieMind control restores media keys.
+                    try:
+                        class POINT(ctypes.Structure):
+                            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+                        point = POINT()
+                        ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+                        clicked_hwnd = ctypes.windll.user32.WindowFromPoint(point)
+                        class_name = ctypes.create_unicode_buffer(128)
+                        ctypes.windll.user32.GetClassNameW(clicked_hwnd, class_name, 128)
+                        if class_name.value.lower() not in ("edit", "richedit", "richedit20w"):
+                            self._keyboard_media_mode = True
+                        else:
+                            self._keyboard_media_mode = False
+                    except Exception:
+                        pass
                 text_focused = self._is_text_entry_focused() and not self._keyboard_media_mode
                 if 0x1B in pressed and self.fullscreen:
                     self.toggle_fullscreen()
