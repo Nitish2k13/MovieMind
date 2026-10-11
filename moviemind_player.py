@@ -62,6 +62,8 @@ class MovieMindPlayer:
         self._fullscreen_osd_id = None
         self._key_poll_id = None
         self._keys_down: set[int] = set()
+        self._keyboard_media_mode = True
+        self._track_popup = None
         self._after_id = None
 
         if vlc is not None:
@@ -163,6 +165,8 @@ class MovieMindPlayer:
         )
         self.question_entry.pack(fill="x", padx=14, pady=(0, 6), ipady=6)
         self.question_entry.bind("<Return>", self._submit_question)
+        self.question_entry.bind("<KeyPress>", self._question_typing_started, add="+")
+        self.title_entry.bind("<KeyPress>", self._question_typing_started, add="+")
         self._button(companion, "Ask MovieMind", self.ask_movie).pack(
             anchor="w", padx=14, pady=(0, 8)
         )
@@ -390,34 +394,93 @@ class MovieMindPlayer:
         return str(value)
 
     def _show_track_menu(self, button, menu) -> None:
+        # Native Tk menus can render transparent behind an always-on-top overlay
+        # on Windows. Use an ordinary Toplevel popup with real buttons instead.
         try:
-            menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
-        finally:
-            menu.grab_release()
+            menu.destroy()
+        except Exception:
+            pass
+        if self._track_popup is not None:
+            try:
+                self._track_popup.destroy()
+            except tk.TclError:
+                pass
+        popup = tk.Toplevel(self.root)
+        self._track_popup = popup
+        popup.overrideredirect(True)
+        popup.attributes("-topmost", True)
+        popup.configure(bg="#202634", highlightthickness=1, highlightbackground="#596174")
+        x = button.winfo_rootx()
+        y = button.winfo_rooty() - 8
+        popup.update_idletasks()
+        rows = []
+        # The track choices are assembled by the caller and attached temporarily.
+        choices = getattr(button, "_moviemind_choices", [])
+        for label, command, enabled in choices:
+            item = tk.Button(
+                popup, text=label, command=lambda action=command: self._run_track_choice(action),
+                anchor="w", bg="#202634", fg=TEXT if enabled else MUTED,
+                activebackground=ACCENT, activeforeground="white", relief="flat",
+                bd=0, padx=12, pady=7, state="normal" if enabled else "disabled"
+            )
+            item.pack(fill="x")
+        popup.update_idletasks()
+        width = max(button.winfo_width(), popup.winfo_reqwidth())
+        height = popup.winfo_reqheight()
+        screen_w = popup.winfo_screenwidth()
+        screen_h = popup.winfo_screenheight()
+        x = max(0, min(x, screen_w - width))
+        if y + height > screen_h:
+            y = max(0, button.winfo_rooty() - height)
+        else:
+            y = button.winfo_rooty() + button.winfo_height()
+        popup.geometry(f"{width}x{height}+{x}+{max(0,y)}")
+        popup.bind("<Escape>", lambda _e: self._close_track_popup(), add="+")
+        popup.bind("<FocusOut>", self._track_popup_focus_out, add="+")
+        popup.focus_force()
+
+    def _run_track_choice(self, command) -> None:
+        self._close_track_popup()
+        command()
+
+    def _close_track_popup(self) -> None:
+        if self._track_popup is not None:
+            try:
+                self._track_popup.destroy()
+            except tk.TclError:
+                pass
+        self._track_popup = None
+
+    def _track_popup_focus_out(self, _event=None) -> None:
+        # Delay closing slightly so a clicked choice can execute reliably.
+        if self._track_popup is not None:
+            try:
+                self._track_popup.after(250, self._close_track_popup)
+            except tk.TclError:
+                pass
 
     def show_audio_menu(self, anchor_button=None) -> None:
-        menu = tk.Menu(self.root, tearoff=0, bg=PANEL, fg=TEXT,
-                       activebackground=ACCENT, activeforeground="white")
+        button = anchor_button or self.audio_button
+        choices = []
         if not self.player or not self.current_path:
-            menu.add_command(label="Open a movie first", state="disabled")
+            choices.append(("Open a movie first", lambda: None, False))
         else:
             try:
                 tracks = self.player.audio_get_track_description() or []
                 current_id = self.player.audio_get_track()
                 if not tracks:
-                    menu.add_command(label="No audio tracks reported by VLC", state="disabled")
+                    choices.append(("No audio tracks reported by VLC", lambda: None, False))
                 else:
                     for track_id, track_name in tracks:
+                        tid = int(track_id)
                         label = self._track_name(track_name)
-                        if int(track_id) == int(current_id):
+                        if tid == int(current_id):
                             label = "✓ " + label
-                        menu.add_command(
-                            label=label,
-                            command=lambda tid=int(track_id): self._select_audio_track(tid)
-                        )
+                        choices.append((label, lambda tid=tid: self._select_audio_track(tid), True))
             except Exception as exc:
-                menu.add_command(label=f"Could not read audio tracks: {exc}", state="disabled")
-        self._show_track_menu(anchor_button or self.audio_button, menu)
+                choices.append((f"Could not read audio tracks: {exc}", lambda: None, False))
+        button._moviemind_choices = choices
+        self._show_track_menu(button, None)
 
     def _select_audio_track(self, track_id: int) -> None:
         if not self.player:
@@ -434,37 +497,33 @@ class MovieMindPlayer:
             messagebox.showerror("Audio track error", str(exc), parent=self.root)
 
     def show_subtitle_menu(self, anchor_button=None) -> None:
-        menu = tk.Menu(self.root, tearoff=0, bg=PANEL, fg=TEXT,
-                       activebackground=ACCENT, activeforeground="white")
+        button = anchor_button or self.subtitle_button
+        choices = []
         if not self.player or not self.current_path:
-            menu.add_command(label="Open a movie first", state="disabled")
+            choices.append(("Open a movie first", lambda: None, False))
         else:
             try:
                 tracks = self.player.video_get_spu_description() or []
                 current_id = self.player.video_get_spu()
-                menu.add_command(label="✓ Disable subtitles" if current_id == -1 else "Disable subtitles",
-                                 command=lambda: self._select_subtitle_track(-1))
+                choices.append(("✓ Disable subtitles" if current_id == -1 else "Disable subtitles",
+                                lambda: self._select_subtitle_track(-1), True))
                 if tracks:
-                    menu.add_separator()
                     for track_id, track_name in tracks:
-                        track_id = int(track_id)
-                        if track_id < 0:
+                        tid = int(track_id)
+                        if tid < 0:
                             continue
                         label = self._track_name(track_name)
-                        if track_id == int(current_id):
+                        if tid == int(current_id):
                             label = "✓ " + label
-                        menu.add_command(
-                            label=label,
-                            command=lambda tid=track_id: self._select_subtitle_track(tid)
-                        )
+                        choices.append((label, lambda tid=tid: self._select_subtitle_track(tid), True))
                 else:
-                    menu.add_command(label="No embedded subtitle tracks reported", state="disabled")
-                menu.add_separator()
-                menu.add_command(label="Load external subtitle file…", command=self.open_subtitle)
+                    choices.append(("No embedded subtitle tracks reported", lambda: None, False))
+                choices.append(("Load external subtitle file…", self.open_subtitle, True))
             except Exception as exc:
-                menu.add_command(label=f"Could not read subtitle tracks: {exc}", state="disabled")
-                menu.add_command(label="Load external subtitle file…", command=self.open_subtitle)
-        self._show_track_menu(anchor_button or self.subtitle_button, menu)
+                choices.append((f"Could not read subtitle tracks: {exc}", lambda: None, False))
+                choices.append(("Load external subtitle file…", self.open_subtitle, True))
+        button._moviemind_choices = choices
+        self._show_track_menu(button, None)
 
     def _select_subtitle_track(self, track_id: int) -> None:
         if not self.player:
@@ -620,11 +679,24 @@ class MovieMindPlayer:
                 })
         return records
 
+    def _question_typing_started(self, _event=None) -> None:
+        self._keyboard_media_mode = False
+
     def _submit_question(self, _event=None) -> str:
         self.ask_movie()
-        # Return submits the question and returns keyboard control to the player.
-        self.root.after(100, self.video_frame.focus_set)
+        # Explicitly switch out of text-edit mode; the VLC native child may not
+        # participate in Tk's focus chain, so keyboard mode is tracked separately.
+        self._keyboard_media_mode = True
+        self.root.after(80, self._restore_player_keyboard_focus)
         return "break"
+
+    def _restore_player_keyboard_focus(self) -> None:
+        try:
+            self.question_entry.selection_clear()
+            self.video_frame.focus_set()
+            self.root.focus_force()
+        except tk.TclError:
+            pass
 
     def ask_movie(self) -> None:
         question = self.question_var.get().strip()
@@ -1048,7 +1120,7 @@ class MovieMindPlayer:
             except Exception:
                 pass
             if foreground == own_window:
-                text_focused = self._is_text_entry_focused()
+                text_focused = self._is_text_entry_focused() and not self._keyboard_media_mode
                 if 0x1B in pressed and self.fullscreen:
                     self.toggle_fullscreen()
                 elif 0x46 in pressed and not text_focused:
