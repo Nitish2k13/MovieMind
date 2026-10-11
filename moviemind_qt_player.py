@@ -875,11 +875,11 @@ Return only the answer, with no meta commentary.
             authoritative_runtime = str(context.get("authoritative_runtime", "")).strip()
             if authoritative_runtime and authoritative_runtime != "Unavailable from the media player":
                 runtime_line = f"**Runtime:** {authoritative_runtime}"
-                runtime_pattern = re.compile(r"(?im)^\\s*(?:\\*\\*)?runtime(?:\\*\\*)?\\s*:\\s*.*$")
+                runtime_pattern = re.compile(r"(?im)^\s*(?:\*\*)?runtime(?:\*\*)?\s*:\s*.*$")
                 if runtime_pattern.search(result):
                     result = runtime_pattern.sub(runtime_line, result, count=1)
                 else:
-                    result = runtime_line + "\\n" + result
+                    result = runtime_line + "\n" + result
         self.answer_area.setPlainText(result)
         self.answer_area.setMinimumHeight(190)
         self.answer_area.setMaximumHeight(320)
