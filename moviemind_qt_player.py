@@ -581,14 +581,14 @@ class MovieMindQtPlayer(QMainWindow):
             body = re.sub(
                 r"(?m)^GOOGLE_IMAGES_LINK:\s*(https?://\S+)",
                 lambda match: (
-                    '<a href="' + html.escape(match.group(1).rstrip('.'), quote=True) + '">'
+                    '<a href="' + html.escape(html.unescape(match.group(1)).rstrip('.'), quote=True) + '">'
                     'Open Google Images for this clue</a>'
                 ),
                 body,
             )
             body = re.sub(
                 r"(https?://[^\s\]\)>,]+)",
-                lambda match: '<a href="' + html.escape(match.group(0).rstrip('.'), quote=True) + '">' +
+                lambda match: '<a href="' + html.escape(html.unescape(match.group(0)).rstrip('.'), quote=True) + '">' +
                     html.escape(match.group(0).rstrip('.')) + '</a>' +
                     html.escape(match.group(0)[len(match.group(0).rstrip('.')):]),
                 body,
