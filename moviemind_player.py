@@ -1382,13 +1382,30 @@ Return only the answer, with no meta commentary.
                         html, flags=re.I | re.S,
                     )
                     clean = lambda value: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
-                    for url, title_html, snippet_html in blocks[:3]:
+                    if blocks:
+                        for url, title_html, snippet_html in blocks[:3]:
+                            # DuckDuckGo may wrap result destinations; preserve the URL returned by search,
+                            # but also provide a stable Google search link for users to investigate further.
+                            snippets.append(
+                                f"QUERY CLUE: {clue}\nTitle: {clean(title_html)}\nURL: {url}\n"
+                                f"Snippet: {clean(snippet_html)}"
+                            )
+                    else:
+                        fallback_url = "https://www.google.com/search?q=" + urllib.parse.quote(
+                            f'"{movie_title}" "{clue}" Easter egg'
+                        )
                         snippets.append(
-                            f"QUERY CLUE: {clue}\nTitle: {clean(title_html)}\nURL: {url}\n"
-                            f"Snippet: {clean(snippet_html)}"
+                            f"QUERY CLUE: {clue}\nNo usable direct result links were returned. "
+                            f"Use this search link to find current results: {fallback_url}"
                         )
                 except Exception as exc:
-                    snippets.append(f"QUERY CLUE: {clue}\nSearch error: {type(exc).__name__}: {exc}")
+                    fallback_url = "https://www.google.com/search?q=" + urllib.parse.quote(
+                        f'"{movie_title}" "{clue}" Easter egg'
+                    )
+                    snippets.append(
+                        f"QUERY CLUE: {clue}\nSearch provider error: {type(exc).__name__}: {exc}\n"
+                        f"Search this clue directly: {fallback_url}"
+                    )
             web_evidence = "\n\n".join(snippets) or "No usable web results were returned by the search provider."
             synthesis_prompt = (
                 f"You are MovieMind's careful Easter-egg researcher. Reply in {language}. Movie: {movie_title}.\n"
@@ -1401,7 +1418,9 @@ Return only the answer, with no meta commentary.
                 "detail to this exact movie. CONFIRMED requires a source that supports the exact detail in this "
                 "movie, not merely a franchise wiki or generic article. If search results do not support a clue, "
                 "say NOT VERIFIED and do not invent a character, location, symbolic meaning, or creator intent. "
-                "Do not treat the visual model's guess as evidence. Include short source titles/URLs when available. "
+                "Do not treat the visual model's guess as evidence. Include source titles and URLs when available. "
+                "If a direct article URL is missing, preserve the provided Google search URL for that exact clue; "
+                "label it 'Search results' rather than presenting it as an article proving the claim. Never invent URLs. "
                 "If no distinctive clue has evidence, say that plainly and suggest pausing on a clearer frame. "
                 "Keep the answer concise and stop after the third finding."
             )
@@ -1496,8 +1515,9 @@ Return only the answer, with no meta commentary.
             result = data.get("response", "").strip() or "The local model returned an empty answer."
         except urllib.error.URLError as exc:
             error = (
-                "Could not reach Ollama at localhost:11434. Start Ollama and confirm "
-                "gemma3:4b is installed. Details: " + str(exc)
+                "MovieMind's local AI is unavailable. Ollama must be installed and running on this computer, "
+                "and the gemma3:4b model must be downloaded. Start Ollama, then run 'ollama list' in a terminal "
+                "to check the model. If it is missing, run 'ollama pull gemma3:4b'. Details: " + str(exc)
             )
         except Exception as exc:
             error = f"Local AI request failed: {exc}"
