@@ -77,6 +77,7 @@ class MovieMindQtPlayer(QMainWindow):
         self.dragging_seek = False
         self._pending_seek_ms: int | None = None
         self._pending_seek_checks = 0
+        self._track_menu_open = False
         self._was_maximized_before_fullscreen = False
         self._normal_geometry_before_fullscreen = None
         self._fullscreen_controls_timer = QTimer(self)
@@ -461,6 +462,13 @@ class MovieMindQtPlayer(QMainWindow):
             QMessageBox.information(self, "Tracks", "Open a movie first.")
             return
         menu = QMenu(button)
+        # Some VLC streams only apply track changes reliably while paused.
+        # Pause temporarily for selection, then resume only if it was playing.
+        was_playing = self.player.get_state() == vlc.State.Playing
+        if was_playing:
+            self.player.set_pause(1)
+        self._track_menu_open = True
+        self._fullscreen_controls_timer.stop()
         try:
             if kind == "audio":
                 tracks = self.player.audio_get_track_description() or []
@@ -474,14 +482,32 @@ class MovieMindQtPlayer(QMainWindow):
                 menu.addAction("No tracks reported by VLC").setEnabled(False)
             for track_id, name in tracks:
                 action = menu.addAction(("✓  " if int(track_id) == int(current) else "") + str(name))
-                action.triggered.connect(lambda checked=False, tid=int(track_id): setter(tid))
+                action.triggered.connect(lambda checked=False, tid=int(track_id): self._apply_track_and_resume(setter, tid, was_playing))
         except Exception as exc:
             menu.addAction(f"Could not read tracks: {exc}").setEnabled(False)
-        # Do not let the auto-hide timer hide the parent deck while the track
-        # menu is open; on some Windows/VLC combinations this interrupts clicks.
-        self._fullscreen_controls_timer.stop()
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
-        if self.isFullScreen():
+        self._track_menu_open = False
+        if was_playing and self.player:
+            # Resume after VLC has applied the selected track, including when the
+            # user dismisses the menu without selecting an item.
+            QTimer.singleShot(250, lambda: self._resume_after_track_menu())
+        elif self.isFullScreen():
+            self._fullscreen_controls_timer.start()
+
+    def _apply_track_and_resume(self, setter, track_id: int, was_playing: bool) -> None:
+        try:
+            setter(track_id)
+        except Exception as exc:
+            self._set_status(f"TRACK CHANGE FAILED: {exc}")
+        if was_playing:
+            QTimer.singleShot(250, self._resume_after_track_menu)
+
+    def _resume_after_track_menu(self) -> None:
+        if self.player and self.player.get_state() == vlc.State.Paused:
+            self.player.set_pause(0)
+            self.play_button.setText("Ⅱ")
+            self._set_status("PLAYING")
+        if self.isFullScreen() and not self._track_menu_open:
             self._fullscreen_controls_timer.start()
 
     def show_audio_menu(self) -> None:
@@ -611,10 +637,20 @@ class MovieMindQtPlayer(QMainWindow):
             self.fullscreen_overlay.raise_()
         if not self.deck.isVisible():
             self.deck.show()
-        self._fullscreen_controls_timer.start()
+        cursor = self.fullscreen_overlay.mapFromGlobal(QCursor.pos())
+        if self.deck.geometry().contains(cursor):
+            self._fullscreen_controls_timer.stop()
+        else:
+            self._fullscreen_controls_timer.start()
 
     def _hide_fullscreen_controls(self) -> None:
-        if self.isFullScreen():
+        if self.isFullScreen() and not self._track_menu_open:
+            cursor = self.fullscreen_overlay.mapFromGlobal(QCursor.pos())
+            if self.deck.geometry().contains(cursor):
+                # Keep controls alive while the pointer is over them, so a click
+                # on Play/Pause cannot be lost to the auto-hide timer.
+                self._fullscreen_controls_timer.start(900)
+                return
             self.deck.hide()
 
     def eventFilter(self, watched, event):
