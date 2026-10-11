@@ -1393,44 +1393,52 @@ Return only the answer, with no meta commentary.
                 search_clue = re.sub(r"\s+", " ", search_clue).strip(" .,:;-")
                 if not search_clue:
                     search_clue = clue
-                search_phrase = f'"{movie_title}" "{search_clue}" Easter egg explanation'
-                search_url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(search_phrase)
-                search_req = urllib.request.Request(
-                    search_url, headers={"User-Agent": "Mozilla/5.0 (compatible; MovieMind/1.0)"},
-                )
-                try:
-                    with urllib.request.urlopen(search_req, timeout=10) as response:
-                        html = response.read().decode("utf-8", errors="replace")
-                    blocks = re.findall(
-                        r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?'
-                        r'<(?:a|div)[^>]+class="result__snippet"[^>]*>(.*?)</(?:a|div)>',
-                        html, flags=re.I | re.S,
+                search_phrases = [f'"{movie_title}" "{search_clue}" Easter egg explanation']
+                # Numbers may encode a real-world date or tribute. Run a separate, targeted
+                # research query rather than assuming the number's meaning from the frame.
+                if re.search(r"\d", search_clue):
+                    search_phrases.append(
+                        f'"{movie_title}" "{search_clue}" cast crew birthday anniversary tribute death date'
                     )
-                    clean = lambda value: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
-                    if blocks:
-                        for url, title_html, snippet_html in blocks[:3]:
-                            # DuckDuckGo may wrap result destinations; preserve the URL returned by search,
-                            # but also provide a stable Google search link for users to investigate further.
-                            snippets.append(
-                                f"QUERY CLUE: {clue}\nTitle: {clean(title_html)}\nURL: {url}\n"
-                                f"Snippet: {clean(snippet_html)}"
+                for search_phrase in search_phrases:
+                    search_url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(search_phrase)
+                    search_req = urllib.request.Request(
+                        search_url, headers={"User-Agent": "Mozilla/5.0 (compatible; MovieMind/1.0)"},
+                    )
+                    try:
+                        with urllib.request.urlopen(search_req, timeout=10) as response:
+                            html = response.read().decode("utf-8", errors="replace")
+                        blocks = re.findall(
+                            r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?'
+                            r'<(?:a|div)[^>]+class="result__snippet"[^>]*>(.*?)</(?:a|div)>',
+                            html, flags=re.I | re.S,
+                        )
+                        clean = lambda value: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
+                        if blocks:
+                            for url, title_html, snippet_html in blocks[:3]:
+                                snippets.append(
+                                    f"QUERY CLUE: {clue}\nSEARCH QUERY: {search_phrase}\n"
+                                    f"Title: {clean(title_html)}\nURL: {url}\n"
+                                    f"Snippet: {clean(snippet_html)}"
+                                )
+                        else:
+                            fallback_url = "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(
+                                f"{movie_title} {search_clue}"
                             )
-                    else:
+                            snippets.append(
+                                f"QUERY CLUE: {clue}\nSEARCH QUERY: {search_phrase}\n"
+                                f"No usable direct result links were returned. "
+                                f"Use this Google Images link to inspect the clue: {fallback_url}"
+                            )
+                    except Exception as exc:
                         fallback_url = "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(
                             f"{movie_title} {search_clue}"
                         )
                         snippets.append(
-                            f"QUERY CLUE: {clue}\nNo usable direct result links were returned. "
-                            f"Use this search link to find current results: {fallback_url}"
+                            f"QUERY CLUE: {clue}\nSEARCH QUERY: {search_phrase}\n"
+                            f"Search provider error: {type(exc).__name__}: {exc}\n"
+                            f"Inspect this clue in Google Images: {fallback_url}"
                         )
-                except Exception as exc:
-                    fallback_url = "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(
-                        f"{movie_title} {search_clue}"
-                    )
-                    snippets.append(
-                        f"QUERY CLUE: {clue}\nSearch provider error: {type(exc).__name__}: {exc}\n"
-                        f"Search this clue directly: {fallback_url}"
-                    )
             web_evidence = "\n\n".join(snippets) or "No usable web results were returned by the search provider."
             synthesis_prompt = (
                 f"You are MovieMind's careful Easter-egg researcher. Reply in {language}. Movie: {movie_title}.\n"
@@ -1445,7 +1453,13 @@ Return only the answer, with no meta commentary.
                 "a credible source that explicitly supports the exact detail in this exact movie. A generic franchise "
                 "page, a search query, a similar-looking emblem, or an unsupported fan theory is not enough. "
                 "If snippets are vague, contradictory, or do not mention the specific clue, use NOT VERIFIED. "
-                "Use POSSIBLE only when a source provides a plausible but incomplete connection. Never infer a "
+                "Use POSSIBLE only when a source provides a plausible but incomplete connection. For visible "
+                "numbers, dates, digital clocks, signs, or license plates, investigate whether the exact number "
+                "is documented as a cast/crew birthday, anniversary, death date, memorial, tribute, or other "
+                "film-related reference. Search results that merely repeat the number are not proof. Do not match "
+                "a date to a person's biography unless a credible source supports both the exact date and the "
+                "connection to this movie or scene. A clock reading such as 201:19:15 may be a timestamp or "
+                "fictional display, not a real-world date; do not force a date interpretation. Never infer a "
                 "Power Stone, Nova Corps, creator intention, or other specific meaning from color/shape alone. "
                 "Do not treat the visual model's guess as evidence. Include source titles and URLs when available. "
                 "If a direct article URL is missing, preserve the provided Google Images URL for that clue; "
