@@ -733,6 +733,12 @@ class MovieMindPlayer:
 
         original = Path(path).stem
         stem = original.replace(".", " ").replace("_", " ")
+        # Remove common leading upload/channel tags, e.g. @MovieBox_Studios.
+        stem = re.sub(
+            r"(?i)^\s*@?\s*(?:moviebox(?:\s+studios)?|mkvcinemas|"
+            r"extramovies|worldfree4u|moviesflix|telegram)\b\s*[-:._ ]*",
+            "", stem,
+        )
         # Drop common bracketed release/source tags, but preserve a year such as (2023).
         stem = re.sub(
             r"(?i)[\[\{(](?!(?:19|20)\d{2}\s*[\]\})])"
@@ -873,6 +879,11 @@ class MovieMindPlayer:
         else:
             self.answer_label.config(text="Ask a general question about the movie. No web search is used.", fg=MUTED)
 
+        # Modes without a text field should run as soon as the user selects them.
+        # Input-based modes intentionally wait for the user to type and submit.
+        if mode in ("Movie overview", "Explain scene", "Explain dialogue"):
+            self.root.after_idle(self.ask_movie)
+
     def _current_subtitle(self, current_ms: int) -> str:
         """Return subtitle text active at the current playback position, if any."""
         active = [
@@ -905,10 +916,16 @@ class MovieMindPlayer:
             )
         if language == "Tanglish":
             return (
-                "Answer in natural conversational Tanglish using ONLY English/Latin letters. "
-                "Use Tamil vocabulary and Tamil sentence structure; do not write ordinary "
-                "English with only a few Tamil words. Never use Tamil Unicode characters. "
-                "Keep movie titles and character names in their original form."
+                "IMPORTANT: Write in spoken Tamil transliterated into English/Latin letters "
+                "(Tanglish), as Tamil speakers casually speak in conversation. Do NOT answer "
+                "in English. Use Tamil words, Tamil grammar, and Tamil sentence order, but spell "
+                "the Tamil sounds with English letters only. For example, write 'Indha padathula "
+                "Thanos power stones collect panna try panraan' rather than 'In this movie, "
+                "Thanos tries to collect the power stones'. Use natural colloquial forms such as "
+                "'irukku', 'pannraan', 'aagum', 'illa', 'appuram', and 'adhunaala' where they fit. "
+                "Do not use Tamil Unicode script. Keep movie titles and character names in their "
+                "original form. Before replying, check that the explanation is predominantly "
+                "Tanglish and rewrite it if it reads like English."
             )
         return "Answer in clear, natural English."
 
