@@ -1383,14 +1383,14 @@ Return only the answer, with no meta commentary.
                 # This helps image results focus on the actual object instead of phrases like
                 # "is visible" or "is present in the scene".
                 search_clue = re.sub(
-                    r"(?i)\\b(?:is|are|was|were)\\s+(?:clearly\\s+)?"
-                    r"(?:visible|present|seen|shown)(?:\\s+(?:in|on|within)\\s+"
-                    r"(?:the\\s+)?(?:scene|image|frame|screen))?\\b",
+                    r"(?i)\b(?:is|are|was|were)\s+(?:clearly\s+)?"
+                    r"(?:visible|present|seen|shown)(?:\s+(?:in|on|within)\s+"
+                    r"(?:the\s+)?(?:scene|image|frame|screen))?\b",
                     "",
                     clue,
                 )
-                search_clue = re.sub(r"(?i)\\b(?:easter\\s+egg|hidden\\s+detail)\\b", "", search_clue)
-                search_clue = re.sub(r"\\s+", " ", search_clue).strip(" .,:;-")
+                search_clue = re.sub(r"(?i)\b(?:easter\s+egg|hidden\s+detail)\b", "", search_clue)
+                search_clue = re.sub(r"\s+", " ", search_clue).strip(" .,:;-")
                 if not search_clue:
                     search_clue = clue
                 search_phrase = f'"{movie_title}" "{search_clue}" Easter egg explanation'
@@ -1425,7 +1425,7 @@ Return only the answer, with no meta commentary.
                         )
                 except Exception as exc:
                     fallback_url = "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(
-                        f"{movie_title} {clue} Easter egg"
+                        f"{movie_title} {search_clue}"
                     )
                     snippets.append(
                         f"QUERY CLUE: {clue}\nSearch provider error: {type(exc).__name__}: {exc}\n"
