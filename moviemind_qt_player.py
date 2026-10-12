@@ -1362,7 +1362,7 @@ Return only the answer, with no meta commentary.
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             options = {
-                "format": "bestvideo[ext=mp4][protocol=https]+bestaudio[ext=m4a][protocol=https]/best[acodec!=none][vcodec!=none]/best",
+                "format": "bestvideo[height<=480][ext=mp4][protocol=https]+bestaudio[ext=m4a][protocol=https]/best[height<=480][acodec!=none][vcodec!=none]/best",
                 "quiet": True,
                 "no_warnings": True,
                 "noplaylist": True,
@@ -1407,10 +1407,12 @@ Return only the answer, with no meta commentary.
             return
         try:
             media = self.instance.media_new(source)
+            if is_url:
+                # A little extra network buffering helps reduce stalls on variable connections.
+                media.add_option(":network-caching=3000")
+                media.add_option(":live-caching=3000")
             if audio_source:
                 # VLC supports secondary input streams through the input-slave media option.
-                # python-vlc's Media.slaves_add API varies across bindings, so avoid relying
-                # on that method's return value for remote YouTube audio URLs.
                 media.add_option(":input-slave=" + audio_source)
             self.player.set_media(media)
             result = self.player.play()
