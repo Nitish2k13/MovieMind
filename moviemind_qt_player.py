@@ -1362,7 +1362,7 @@ Return only the answer, with no meta commentary.
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             options = {
-                "format": "bestvideo[height<=480][ext=mp4][protocol=https]+bestaudio[ext=m4a][protocol=https]/best[height<=480][acodec!=none][vcodec!=none]/best",
+                "format": "best[height<=360][acodec!=none][vcodec!=none]/bestvideo[height<=360][ext=mp4][protocol=https]+bestaudio[ext=m4a][protocol=https]/best[height<=360][acodec!=none][vcodec!=none]/best",
                 "quiet": True,
                 "no_warnings": True,
                 "noplaylist": True,
@@ -1409,8 +1409,8 @@ Return only the answer, with no meta commentary.
             media = self.instance.media_new(source)
             if is_url:
                 # A little extra network buffering helps reduce stalls on variable connections.
-                media.add_option(":network-caching=3000")
-                media.add_option(":live-caching=3000")
+                media.add_option(":network-caching=8000")
+                media.add_option(":live-caching=8000")
             if audio_source:
                 # VLC supports secondary input streams through the input-slave media option.
                 media.add_option(":input-slave=" + audio_source)
