@@ -32,7 +32,7 @@ except ImportError:
     pytesseract = None
 
 from PySide6.QtCore import Qt, QTimer, QObject, QEvent, Signal
-from PySide6.QtGui import QAction, QKeySequence, QCursor
+from PySide6.QtGui import QAction, QKeySequence, QCursor, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QMenu, QMessageBox, QPushButton, QSizePolicy, QSlider, QVBoxLayout,
@@ -429,6 +429,7 @@ class MovieMindQtPlayer(QMainWindow):
         answer_heading.setObjectName("eyebrow")
         side.addWidget(answer_heading)
         self.answer_area = QTextBrowser()
+        self.answer_area.anchorClicked.connect(QDesktopServices.openUrl)
         self.answer_area.setReadOnly(True)
         self.answer_area.setOpenExternalLinks(False)
         self.answer_area.setOpenLinks(False)
@@ -592,9 +593,17 @@ class MovieMindQtPlayer(QMainWindow):
             )
             query = re.sub(r"(?i)\s+(?:game|arcade)\s+(?:cabinet|machine)$", "", query)
             query = query.strip(" .,:;-") or clue.strip()
-            return "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(query)
+            # For common logo clues, search the logo name itself (e.g. "NYPD"),
+            # not a full sentence such as "NYPD logo is a clear visual element".
+            logo_match = re.match(r"(?i)^([A-Z0-9][A-Z0-9 .&'-]{0,35}?)\\s+(?:logo|symbol|emblem)\\b", query)
+            if logo_match:
+                query = logo_match.group(1).strip(" .,:;-")
+            return "https://www.google.com/search?" + urllib.parse.urlencode({"tbm": "isch", "q": query})
 
-        self.answer_area.setOpenExternalLinks(True)
+        # Open clicked links through the OS browser explicitly. With automatic
+        # QTextBrowser navigation disabled, anchorClicked is handled by the connection
+        # installed once when the widget is created.
+        self.answer_area.setOpenExternalLinks(False)
         self.answer_area.setOpenLinks(False)
         self.answer_area.setTextInteractionFlags(Qt.TextBrowserInteraction)
         self.answer_area.setMinimumHeight(300)
