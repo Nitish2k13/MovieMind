@@ -1390,6 +1390,9 @@ Return only the answer, with no meta commentary.
         self, source: str, is_url: bool, playlist_source: str | None = None,
         display_title: str | None = None
     ) -> None:
+        if is_url and self._is_youtube_url(source) and playlist_source is None:
+            self._play_youtube_url(source)
+            return
         if not self.player or vlc is None or not self.instance:
             QMessageBox.warning(self, "VLC unavailable", "Install VLC desktop and python-vlc first.")
             return
