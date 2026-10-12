@@ -1362,7 +1362,7 @@ Return only the answer, with no meta commentary.
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             options = {
-                "format": "best[ext=mp4]/best",
+                "format": "bestvideo[ext=mp4][protocol=https]+bestaudio[ext=m4a][protocol=https]/best[acodec!=none][vcodec!=none]/best",
                 "quiet": True,
                 "no_warnings": True,
                 "noplaylist": True,
@@ -1370,8 +1370,17 @@ Return only the answer, with no meta commentary.
             }
             with yt_dlp.YoutubeDL(options) as ydl:
                 info = ydl.extract_info(url, download=False)
-            stream_url = info.get("url")
             title = info.get("title") or self._trim_movie_title(url)
+            requested_formats = info.get("requested_formats") or []
+            video_format = next((item for item in requested_formats if item.get("vcodec") not in (None, "none")), None)
+            audio_format = next((item for item in requested_formats if item.get("acodec") not in (None, "none")), None)
+            if video_format and audio_format:
+                self._play_media_source(
+                    video_format["url"], is_url=True, playlist_source=url,
+                    display_title=title, audio_source=audio_format["url"]
+                )
+                return
+            stream_url = info.get("url")
             if not stream_url:
                 raise RuntimeError("YouTube did not provide a playable stream URL.")
             self._play_media_source(stream_url, is_url=True, playlist_source=url, display_title=title)
@@ -1388,7 +1397,7 @@ Return only the answer, with no meta commentary.
 
     def _play_media_source(
         self, source: str, is_url: bool, playlist_source: str | None = None,
-        display_title: str | None = None
+        display_title: str | None = None, audio_source: str | None = None
     ) -> None:
         if is_url and self._is_youtube_url(source) and playlist_source is None:
             self._play_youtube_url(source)
@@ -1398,6 +1407,13 @@ Return only the answer, with no meta commentary.
             return
         try:
             media = self.instance.media_new(source)
+            if audio_source:
+                add_audio_slave = getattr(media, "slaves_add", None)
+                audio_type = getattr(getattr(vlc, "MediaSlaveType", None), "audio", None)
+                if not callable(add_audio_slave) or audio_type is None:
+                    raise RuntimeError("This VLC/python-vlc version cannot attach a separate YouTube audio stream.")
+                if not add_audio_slave(audio_type, 4, audio_source):
+                    raise RuntimeError("VLC could not attach the YouTube audio stream.")
             self.player.set_media(media)
             result = self.player.play()
             if result == -1:
