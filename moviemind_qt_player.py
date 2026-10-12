@@ -1322,9 +1322,14 @@ Return only the answer, with no meta commentary.
         if path:
             self._play_media_source(path, is_url=False)
 
+    @staticmethod
+    def _is_youtube_url(url: str) -> bool:
+        host = (urlparse(url).hostname or "").lower()
+        return host == "youtu.be" or host.endswith(".youtu.be") or host == "youtube.com" or host.endswith(".youtube.com")
+
     def open_stream_url(self) -> None:
         url, accepted = QInputDialog.getText(
-            self, "Play online video", "Paste a direct video or stream URL (HTTP/HTTPS):"
+            self, "Play online video", "Paste a direct video URL or a YouTube link (HTTP/HTTPS):"
         )
         if not accepted:
             return
@@ -1335,22 +1340,56 @@ Return only the answer, with no meta commentary.
         if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
             QMessageBox.warning(
                 self, "Invalid URL",
-                "Enter a full HTTP or HTTPS video/stream URL."
+                "Enter a full HTTP or HTTPS video URL."
             )
             return
-        host = (parsed.hostname or "").lower()
-        if host in ("youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"):
-            QMessageBox.information(
-                self, "YouTube integration is next",
-                "This looks like a YouTube webpage URL, not a direct media stream. "
-                "The first online-playback step supports direct stream URLs; embedded YouTube "
-                "playback will be added separately so MovieMind does not mistake a webpage "
-                "for a video stream."
-            )
+        if self._is_youtube_url(url):
+            self._play_youtube_url(url)
             return
         self._play_media_source(url, is_url=True)
 
-    def _play_media_source(self, source: str, is_url: bool) -> None:
+    def _play_youtube_url(self, url: str) -> None:
+        """Resolve a YouTube page to a playable stream using yt-dlp, then hand it to VLC."""
+        try:
+            import yt_dlp
+        except ImportError:
+            QMessageBox.warning(
+                self, "YouTube support not installed",
+                "Install the YouTube URL resolver with:\n\npython -m pip install -r requirements-qt.txt"
+            )
+            return
+        self._set_status("RESOLVING YOUTUBE VIDEO…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            options = {
+                "format": "best[protocol^=http][vcodec!=none][acodec!=none]/best[protocol^=http]/best",
+                "quiet": True,
+                "no_warnings": True,
+                "noplaylist": True,
+                "skip_download": True,
+            }
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(url, download=False)
+            stream_url = info.get("url")
+            title = info.get("title") or self._trim_movie_title(url)
+            if not stream_url:
+                raise RuntimeError("YouTube did not provide a playable stream URL.")
+            self._play_media_source(stream_url, is_url=True, playlist_source=url, display_title=title)
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Could not open YouTube video",
+                "MovieMind could not resolve this YouTube link. Check your internet connection, "
+                "confirm the video is publicly playable, update yt-dlp, and try again.\n\n"
+                + str(exc)
+            )
+            self._set_status("YOUTUBE LINK FAILED")
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _play_media_source(
+        self, source: str, is_url: bool, playlist_source: str | None = None,
+        display_title: str | None = None
+    ) -> None:
         if not self.player or vlc is None or not self.instance:
             QMessageBox.warning(self, "VLC unavailable", "Install VLC desktop and python-vlc first.")
             return
@@ -1362,7 +1401,7 @@ Return only the answer, with no meta commentary.
                 raise RuntimeError("VLC could not start playback.")
             self.current_path = source
             self.current_source_is_url = is_url
-            clean_title = self._trim_movie_title(source)
+            clean_title = display_title or self._trim_movie_title(playlist_source or source)
             self.movie_title = clean_title
             self.subtitle_context.clear()
             self.recent_qa_memory.clear()
@@ -1384,9 +1423,14 @@ Return only the answer, with no meta commentary.
             self.movie_name.setText(clean_title.upper()[:48])
             self.fullscreen_title.setText(clean_title)
             self._set_status("OPENING ONLINE STREAM" if is_url else "OPENING MOVIE")
-            entry = {"source": source, "title": clean_title, "is_url": "true" if is_url else "false"}
+            queue_source = playlist_source or source
+            entry = {
+                "source": queue_source,
+                "title": clean_title,
+                "is_url": "true" if is_url else "false",
+            }
             self.playlist_items = [
-                item for item in self.playlist_items if item.get("source") != source
+                item for item in self.playlist_items if item.get("source") != queue_source
             ]
             self.playlist_items.append(entry)
             QTimer.singleShot(350, self._reattach_video)
@@ -1396,8 +1440,8 @@ Return only the answer, with no meta commentary.
         except Exception as exc:
             QMessageBox.critical(
                 self, "Could not play media",
-                "MovieMind could not start this media source. Check that the URL is a direct "
-                "stream URL accessible to VLC, then try again.\n\n" + str(exc)
+                "MovieMind could not start this media source. Check that the URL is accessible "
+                "to VLC, then try again.\n\n" + str(exc)
             )
 
     def show_playlist_menu(self) -> None:
