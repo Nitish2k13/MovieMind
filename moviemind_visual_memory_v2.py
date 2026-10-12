@@ -1810,16 +1810,39 @@ def _find_reference_images(answer_text, title, inventory):
 
     found, seen_titles = [], set()
     attempted_queries = set()
+    movie_title = " ".join(str(title or "").split())
     for item in queries[:5]:
         query = item["query"]
-        # Some image indexes perform poorly on full film descriptions. Try a concise query too.
+        # Long, movie-specific descriptions often return no licensed thumbnails.
+        # Search the original clue, then a compact clue-only version, then known named leads.
+        clue = str(item.get("related_clue") or item.get("description") or "").strip()
+        compact_clue = re.sub(r"[^A-Za-z0-9 ]", " ", clue)
+        compact_clue = " ".join(
+            word for word in compact_clue.split()
+            if word.lower() not in {
+                "the", "this", "that", "visible", "possibly", "possible", "appears",
+                "object", "detail", "scene", "background", "movie", "film", "reference",
+                "image", "shown", "looks", "like", "with", "from", "near"
+            }
+        )[:90]
         query_variants = [query]
-        if "perfectly balanced" in query.lower() or "switchblade" in query.lower():
-            query_variants.append("Thanos Gamora switchblade knife")
-        elif "spacecraft" in query.lower() or "marvel spacecraft" in query.lower():
-            query_variants.append("Marvel Q-Ship Outrider dropship Chitauri Leviathan")
+        if compact_clue and compact_clue.lower() not in query.lower():
+            query_variants.append(compact_clue)
+        if movie_title and query.lower().startswith(movie_title.lower()):
+            titleless = query[len(movie_title):].strip(" :,-")
+            if titleless and titleless.lower() not in {q.lower() for q in query_variants}:
+                query_variants.append(titleless)
+        lowered = (query + " " + clue).lower()
+        if any(term in lowered for term in ("perfectly balanced", "switchblade", "double-edged knife")):
+            query_variants.extend(["Thanos Gamora switchblade knife", "Thanos double-edged blade Infinity War"])
+        if any(term in lowered for term in ("spacecraft", "spaceship", "marvel spacecraft", "q-ship", "outrider", "chitauri", "leviathan")):
+            query_variants.extend([
+                "Marvel Q-Ship Avengers Infinity War",
+                "Marvel Outrider dropship Chitauri Leviathan",
+            ])
         for query_variant in query_variants:
-            if query_variant.lower() in attempted_queries:
+            query_variant = " ".join(query_variant.split()).strip()
+            if not query_variant or query_variant.lower() in attempted_queries:
                 continue
             attempted_queries.add(query_variant.lower())
             # Search Commons first, then use Openverse if it doesn't return enough images.
