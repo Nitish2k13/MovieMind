@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 import uuid
 import time
+from urllib.parse import urlparse, unquote
 from collections import deque
 from datetime import datetime
 from io import BytesIO
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QMenu, QMessageBox, QPushButton, QSizePolicy, QSlider, QVBoxLayout,
     QWidget, QFrame, QComboBox, QLineEdit, QTextEdit, QTextBrowser, QScrollArea,
+    QInputDialog,
 )
 
 try:
@@ -98,6 +100,8 @@ class MovieMindQtPlayer(QMainWindow):
         self.setMinimumSize(980, 640)
         self.setStyleSheet(STYLESHEET)
         self.current_path: str | None = None
+        self.current_source_is_url = False
+        self.playlist_items: list[dict[str, str]] = []
         self.movie_title = ""
         self.subtitle_context: list[dict[str, object]] = []
         self.recent_qa_memory: list[dict[str, str]] = []
@@ -274,6 +278,12 @@ class MovieMindQtPlayer(QMainWindow):
         self.open_button.setObjectName("primary")
         self.open_button.clicked.connect(self.open_movie)
         controls.addWidget(self.open_button)
+        self.open_url_button = QPushButton("↗  Play URL")
+        self.open_url_button.clicked.connect(self.open_stream_url)
+        controls.addWidget(self.open_url_button)
+        self.playlist_button = QPushButton("☷  Playlist")
+        self.playlist_button.clicked.connect(self.show_playlist_menu)
+        controls.addWidget(self.playlist_button)
         self.back_button = self._icon_button("↶", "Back 10 seconds", lambda: self.skip(-10))
         controls.addWidget(self.back_button)
         self.play_button = self._icon_button("▶", "Play / pause", self.toggle_play)
@@ -1309,19 +1319,50 @@ Return only the answer, with no meta commentary.
             self, "Open movie", str(Path.home()),
             "Video files (*.mkv *.mp4 *.avi *.mov *.wmv *.webm *.m4v);;All files (*.*)"
         )
-        if not path:
+        if path:
+            self._play_media_source(path, is_url=False)
+
+    def open_stream_url(self) -> None:
+        url, accepted = QInputDialog.getText(
+            self, "Play online video", "Paste a direct video or stream URL (HTTP/HTTPS):"
+        )
+        if not accepted:
             return
-        if not self.player or vlc is None:
+        url = url.strip()
+        if not url:
+            return
+        parsed = urlparse(url)
+        if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+            QMessageBox.warning(
+                self, "Invalid URL",
+                "Enter a full HTTP or HTTPS video/stream URL."
+            )
+            return
+        host = (parsed.hostname or "").lower()
+        if host in ("youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"):
+            QMessageBox.information(
+                self, "YouTube integration is next",
+                "This looks like a YouTube webpage URL, not a direct media stream. "
+                "The first online-playback step supports direct stream URLs; embedded YouTube "
+                "playback will be added separately so MovieMind does not mistake a webpage "
+                "for a video stream."
+            )
+            return
+        self._play_media_source(url, is_url=True)
+
+    def _play_media_source(self, source: str, is_url: bool) -> None:
+        if not self.player or vlc is None or not self.instance:
             QMessageBox.warning(self, "VLC unavailable", "Install VLC desktop and python-vlc first.")
             return
         try:
-            media = self.instance.media_new(path)
+            media = self.instance.media_new(source)
             self.player.set_media(media)
             result = self.player.play()
             if result == -1:
                 raise RuntimeError("VLC could not start playback.")
-            self.current_path = path
-            clean_title = self._trim_movie_title(path)
+            self.current_path = source
+            self.current_source_is_url = is_url
+            clean_title = self._trim_movie_title(source)
             self.movie_title = clean_title
             self.subtitle_context.clear()
             self.recent_qa_memory.clear()
@@ -1334,17 +1375,74 @@ Return only the answer, with no meta commentary.
             self._visual_last_full_ocr = 0.0
             self._visual_last_saved = 0.0
             self.ai_input.clear()
-            self.answer_area.setPlainText("New movie session started. Ask about the current scene or dialogue.")
+            self.answer_area.setPlainText(
+                "Online stream opened. Ask about the current scene or dialogue."
+                if is_url else
+                "New movie session started. Ask about the current scene or dialogue."
+            )
             self.title_value.setText(clean_title)
             self.movie_name.setText(clean_title.upper()[:48])
             self.fullscreen_title.setText(clean_title)
-            self._set_status("OPENING MOVIE")
+            self._set_status("OPENING ONLINE STREAM" if is_url else "OPENING MOVIE")
+            entry = {"source": source, "title": clean_title, "is_url": "true" if is_url else "false"}
+            self.playlist_items = [
+                item for item in self.playlist_items if item.get("source") != source
+            ]
+            self.playlist_items.append(entry)
             QTimer.singleShot(350, self._reattach_video)
             # VLC can finish opening the media after play() returns; reapply the app's
             # volume and clear VLC's internal mute state once its audio track is ready.
             QTimer.singleShot(1200, self._restore_audio_output)
         except Exception as exc:
-            QMessageBox.critical(self, "Could not open movie", str(exc))
+            QMessageBox.critical(
+                self, "Could not play media",
+                "MovieMind could not start this media source. Check that the URL is a direct "
+                "stream URL accessible to VLC, then try again.\n\n" + str(exc)
+            )
+
+    def show_playlist_menu(self) -> None:
+        menu = QMenu(self.playlist_button)
+        add_local = menu.addAction("＋ Add local movie…")
+        add_local.triggered.connect(self._add_movie_to_playlist)
+        menu.addSeparator()
+        if not self.playlist_items:
+            empty = menu.addAction("Playlist is empty")
+            empty.setEnabled(False)
+        for item in self.playlist_items:
+            label = item.get("title") or item.get("source", "Media")
+            if item.get("is_url") == "true":
+                label = "🌐  " + label
+            action = menu.addAction(label)
+            action.triggered.connect(
+                lambda checked=False, entry=item: self._play_media_source(
+                    entry["source"], entry.get("is_url") == "true"
+                )
+            )
+        if self.playlist_items:
+            menu.addSeparator()
+            clear_action = menu.addAction("Clear playlist")
+            clear_action.triggered.connect(self._clear_playlist)
+        menu.exec(self.playlist_button.mapToGlobal(self.playlist_button.rect().bottomLeft()))
+
+    def _add_movie_to_playlist(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Add movie to playlist", str(Path.home()),
+            "Video files (*.mkv *.mp4 *.avi *.mov *.wmv *.webm *.m4v);;All files (*.*)"
+        )
+        if not path:
+            return
+        entry = {
+            "source": path,
+            "title": self._trim_movie_title(path),
+            "is_url": "false",
+        }
+        if not any(item.get("source") == path for item in self.playlist_items):
+            self.playlist_items.append(entry)
+        self._set_status(f"PLAYLIST · {len(self.playlist_items)} ITEMS")
+
+    def _clear_playlist(self) -> None:
+        self.playlist_items.clear()
+        self._set_status("PLAYLIST CLEARED")
 
     def _reattach_video(self) -> None:
         if not self.player:
@@ -1682,8 +1780,14 @@ Return only the answer, with no meta commentary.
 
     @staticmethod
     def _trim_movie_title(path: str) -> str:
-        """Remove release metadata/language lists while preserving the film year."""
-        title = Path(path).stem
+        """Build a readable title from a local path or online media URL."""
+        parsed = urlparse(path)
+        if parsed.scheme.lower() in ("http", "https"):
+            candidate = unquote(Path(parsed.path).name)
+            title = re.sub(r"\.(?:m3u8|mpd|mp4|mkv|webm|mov|avi|m4v)(?:$)", "", candidate, flags=re.I)
+            title = title or (parsed.hostname or "Online stream")
+        else:
+            title = Path(path).stem
         title = re.sub(r"^@?MovieBox[_ .-]*Studios?\s*", "", title, flags=re.I)
         title = re.sub(r"^@[A-Za-z0-9_.-]+\s+", "", title)
         title = re.sub(
