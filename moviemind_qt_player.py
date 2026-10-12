@@ -1408,12 +1408,10 @@ Return only the answer, with no meta commentary.
         try:
             media = self.instance.media_new(source)
             if audio_source:
-                add_audio_slave = getattr(media, "slaves_add", None)
-                audio_type = getattr(getattr(vlc, "MediaSlaveType", None), "audio", None)
-                if not callable(add_audio_slave) or audio_type is None:
-                    raise RuntimeError("This VLC/python-vlc version cannot attach a separate YouTube audio stream.")
-                if not add_audio_slave(audio_type, 4, audio_source):
-                    raise RuntimeError("VLC could not attach the YouTube audio stream.")
+                # VLC supports secondary input streams through the input-slave media option.
+                # python-vlc's Media.slaves_add API varies across bindings, so avoid relying
+                # on that method's return value for remote YouTube audio URLs.
+                media.add_option(":input-slave=" + audio_source)
             self.player.set_media(media)
             result = self.player.play()
             if result == -1:
