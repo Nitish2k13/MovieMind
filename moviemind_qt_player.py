@@ -1275,10 +1275,14 @@ Return only the answer, with no meta commentary.
                     result = runtime_pattern.sub(runtime_line, result, count=1)
                 else:
                     result = runtime_line + "\n" + result
-        # Render model output as clean plain text; do not show Markdown decoration such as **bold**.
+        # Ordinary offline answers must never inherit the Easter-egg link styling.
+        # Remove Markdown link wrappers and render the remaining text as escaped HTML;
+        # only _render_easter_egg_history() is allowed to create clickable links.
+        import html
+        result = re.sub(r"\[([^\]]+)\]\(https?://[^)]+\)", r"\1", result)
         result = re.sub(r"(?<!\*)\*\*(.*?)\*\*(?!\*)", r"\1", result)
         result = re.sub(r"(?m)^\s*#{1,6}\s+", "", result)
-        self.answer_area.setPlainText(result)
+        self.answer_area.setHtml(html.escape(result).replace("\n", "<br>"))
         self.answer_area.setMinimumHeight(190)
         self.answer_area.setMaximumHeight(320)
         self._set_status("ANSWER READY")
