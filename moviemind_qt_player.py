@@ -848,8 +848,6 @@ class MovieMindQtPlayer(QMainWindow):
             f"MovieMind answered: {item['answer'][:700]}"
             for item in self.recent_qa_memory[-5:]
         ) or "No earlier MovieMind conversation in this session."
-        visual_memory_context = self._build_visual_memory_context()
-
         if mode == "Movie overview":
             try:
                 media_length_ms = self.player.get_length() if self.player else -1
@@ -935,18 +933,17 @@ CURRENT SUBTITLE:
 TIMESTAMPED SUBTITLE CONTEXT:
 {context}
 
-AUTOMATIC LIGHTWEIGHT VISUAL MEMORY (sampled frames, visual-change fingerprints and selective OCR; treat OCR as uncertain evidence):
-{visual_memory_context}
+CURRENT USER-REQUESTED FRAME:
+A fresh screenshot of the playback frame at the moment this feature was clicked is attached to this request. Base any scene-specific interpretation on this current frame, not on screenshots captured earlier during playback.
 
 RECENT CONVERSATION MEMORY (may contain previous model mistakes; treat as clues, not proof):
 {memory}
 
 OFFLINE AND EVIDENCE RULES:
 - All normal assistant modes must work locally through Ollama; never browse, call web APIs, or access the network.
-- For scene/dialogue answers, the image is primary evidence and current/nearby subtitles are supporting evidence.
-- Movie overview and general questions are about the movie generally, not automatically the current scene.
-- Automatic visual memory is a compact history of sampled frames and selective OCR; it is not a guaranteed list of recognized characters or objects.
-- Use it to connect recent visual changes and visible text across the movie, but never treat OCR or a prior answer as certain proof.
+- Use the freshly captured current frame as visual evidence for the user's selected feature; current/nearby subtitles are supporting evidence.
+- Do not use pre-captured visual-memory frames, thumbnail history, or tiny JSON/OCR summaries as evidence for this answer.
+- Movie overview and general questions should still answer the requested movie-level question; use the current frame only when relevant to the question.
 - Memory is for continuity, not proof; prior answers may be wrong.
 - Never invent character identities, actions, motivations, credits, or plot events.
 - If identity, object, speaker, or context is uncertain, say so instead of guessing.
@@ -961,18 +958,23 @@ FINAL LANGUAGE CHECK: Before answering, ensure the complete response follows the
 Return only the answer, with no meta commentary.
 """
         snapshot_path = None
-        if mode in ("Explain scene", "Explain dialogue"):
-            try:
+        # Capture the live playback frame when the user invokes any offline feature.
+        # Never feed old sampled thumbnails into the answer: tiny/pre-captured frames
+        # can cause incorrect character and scene identification.
+        try:
+            if self.player and self.current_path:
                 snapshot_path = str(Path(tempfile.gettempdir()) / f"moviemind_frame_{uuid.uuid4().hex}.png")
-                self.player.video_take_snapshot(0, snapshot_path, 0, 0)
-                self._pending_snapshot_paths.add(snapshot_path)
-            except Exception:
-                snapshot_path = None
+                snapshot_result = self.player.video_take_snapshot(0, snapshot_path, 0, 0)
+                if snapshot_result == -1:
+                    snapshot_path = None
+                else:
+                    self._pending_snapshot_paths.add(snapshot_path)
+        except Exception:
+            snapshot_path = None
         request_context = {
             "mode": mode, "question": question_for_memory,
             "language": language, "time": clock(current_ms),
             "authoritative_runtime": actual_runtime if mode == "Movie overview" else "",
-            "visual_frames": self._recent_visual_images(2) if mode in ("Explain scene", "Explain dialogue") else [],
         }
         self.ai_request_running = True
         self.ai_submit.setEnabled(False)
@@ -1203,17 +1205,14 @@ Return only the answer, with no meta commentary.
                 "model": "gemma3:4b", "prompt": prompt, "stream": False,
                 "keep_alive": "30m", "options": {"temperature": 0.15, "num_predict": 220},
             }
-            visual_images = request_context.get("visual_frames", [])
             if snapshot_path:
-                for _ in range(15):
+                for _ in range(20):
                     if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
                         break
                     time.sleep(0.1)
                 if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
                     with open(snapshot_path, "rb") as image_file:
                         request_data["images"] = [base64.b64encode(image_file.read()).decode("ascii")]
-            if visual_images:
-                request_data["images"] = request_data.get("images", []) + visual_images[-2:]
             payload = json.dumps(request_data).encode("utf-8")
             request = urllib.request.Request(
                 "http://localhost:11434/api/generate", data=payload,
