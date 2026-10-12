@@ -85,6 +85,12 @@ class AIResultBridge(QObject):
     easter_egg_finished = Signal(str, str, str)
 
 
+class NoWheelComboBox(QComboBox):
+    """Prevent accidental value changes when the pointer passes over a combo box."""
+    def wheelEvent(self, event) -> None:
+        event.ignore()
+
+
 def clock(ms: int) -> str:
     seconds = max(0, ms // 1000)
     hours, rem = divmod(seconds, 3600)
@@ -313,6 +319,19 @@ class MovieMindQtPlayer(QMainWindow):
         self.volume_value.setObjectName("muted")
         self.volume_value.setMinimumWidth(38)
         controls.addWidget(self.volume_value)
+        controls.addSpacing(8)
+        controls.addWidget(QLabel("SPEED"))
+        self.speed_combo = QComboBox()
+        self.speed_combo.addItems([
+            "0.2x", "0.3x", "0.4x", "0.5x", "0.6x", "0.7x", "0.8x", "0.9x",
+            "1.0x", "1.1x", "1.2x", "1.3x", "1.4x", "1.5x", "1.6x", "1.7x",
+            "1.8x", "1.9x", "2.0x",
+        ])
+        self.speed_combo.setCurrentText("1.0x")
+        self.speed_combo.setFixedWidth(76)
+        self.speed_combo.setToolTip("Playback speed")
+        self.speed_combo.currentTextChanged.connect(self._set_playback_speed)
+        controls.addWidget(self.speed_combo)
         self.fullscreen_button = self._icon_button("⛶", "Toggle fullscreen", self.toggle_fullscreen)
         controls.addWidget(self.fullscreen_button)
         deck_layout.addLayout(controls)
@@ -397,7 +416,7 @@ class MovieMindQtPlayer(QMainWindow):
 
         language_row = QHBoxLayout()
         language_row.addWidget(QLabel("REPLY LANGUAGE"))
-        self.language_combo = QComboBox()
+        self.language_combo = NoWheelComboBox()
         self.language_combo.addItems(["English", "Tamil", "Tanglish"])
         self.language_combo.setCurrentText("English")
         self.language_combo.currentTextChanged.connect(self._language_changed)
@@ -1292,7 +1311,8 @@ Return only the answer, with no meta commentary.
         result = re.sub(r"\[([^\]]+)\]\(https?://[^)]+\)", r"\1", result)
         result = re.sub(r"(?<!\*)\*\*(.*?)\*\*(?!\*)", r"\1", result)
         result = re.sub(r"(?m)^\s*#{1,6}\s+", "", result)
-        self.answer_area.setHtml(html.escape(result).replace("\n", "<br>"))
+        # Ordinary feature responses are literal text; only Easter-egg history uses rich links.
+        self.answer_area.setPlainText(result)
         self.answer_area.setMinimumHeight(190)
         self.answer_area.setMaximumHeight(320)
         self._set_status("ANSWER READY")
@@ -1362,7 +1382,7 @@ Return only the answer, with no meta commentary.
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             options = {
-                "format": "best[height<=360][acodec!=none][vcodec!=none]/bestvideo[height<=360][ext=mp4][protocol=https]+bestaudio[ext=m4a][protocol=https]/best[height<=360][acodec!=none][vcodec!=none]/best",
+                "format": "best[height<=480][acodec!=none][vcodec!=none]/bestvideo[height<=480][ext=mp4][protocol=https]+bestaudio[ext=m4a][protocol=https]/best[height<=480][acodec!=none][vcodec!=none]/best",
                 "quiet": True,
                 "no_warnings": True,
                 "noplaylist": True,
@@ -1409,8 +1429,9 @@ Return only the answer, with no meta commentary.
             media = self.instance.media_new(source)
             if is_url:
                 # A little extra network buffering helps reduce stalls on variable connections.
-                media.add_option(":network-caching=8000")
-                media.add_option(":live-caching=8000")
+                # Moderate buffering helps recovery after seeks.
+                media.add_option(":network-caching=3000")
+                media.add_option(":live-caching=3000")
             if audio_source:
                 # VLC supports secondary input streams through the input-slave media option.
                 media.add_option(":input-slave=" + audio_source)
@@ -1766,6 +1787,19 @@ Return only the answer, with no meta commentary.
             if result == -1:
                 # VLC may reject time-based seeking for some media; try position seeking.
                 self.player.set_position(min(1.0, max(0.0, target / self.duration_ms)))
+
+    def _set_playback_speed(self, value: str) -> None:
+        if not self.player:
+            return
+        try:
+            rate = float(value.rstrip("x"))
+            result = self.player.set_rate(rate)
+            if result == -1:
+                self._set_status("PLAYBACK SPEED NOT SUPPORTED BY THIS STREAM")
+            else:
+                self._set_status(f"PLAYBACK SPEED · {value}")
+        except Exception:
+            self._set_status("COULD NOT CHANGE PLAYBACK SPEED")
 
     def _set_volume(self, value: int) -> None:
         self.volume_value.setText(f"{value}%")
