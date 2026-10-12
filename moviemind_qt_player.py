@@ -107,6 +107,7 @@ class MovieMindQtPlayer(QMainWindow):
         self.setStyleSheet(STYLESHEET)
         self.current_path: str | None = None
         self.current_source_is_url = False
+        self.current_youtube_separate_streams = False
         self.playlist_items: list[dict[str, str]] = []
         self.movie_title = ""
         self.subtitle_context: list[dict[str, object]] = []
@@ -323,7 +324,7 @@ class MovieMindQtPlayer(QMainWindow):
         controls.addWidget(QLabel("SPEED"))
         self.speed_combo = QComboBox()
         self.speed_combo.addItems([
-            "0.2x", "0.3x", "0.4x", "0.5x", "0.6x", "0.7x", "0.8x", "0.9x",
+            "0.2x", "0.25x", "0.3x", "0.4x", "0.5x", "0.6x", "0.7x", "0.8x", "0.9x",
             "1.0x", "1.1x", "1.2x", "1.3x", "1.4x", "1.5x", "1.6x", "1.7x",
             "1.8x", "1.9x", "2.0x",
         ])
@@ -429,7 +430,9 @@ class MovieMindQtPlayer(QMainWindow):
         side.addWidget(answer_heading)
         self.answer_area = QTextBrowser()
         self.answer_area.setReadOnly(True)
-        self.answer_area.setOpenExternalLinks(True)
+        self.answer_area.setOpenExternalLinks(False)
+        self.answer_area.setOpenLinks(False)
+        self.answer_area.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.answer_area.setPlaceholderText("Choose an action above to get started.")
         self.answer_area.setMinimumHeight(70)
         self.answer_area.setMaximumHeight(110)
@@ -591,6 +594,9 @@ class MovieMindQtPlayer(QMainWindow):
             query = query.strip(" .,:;-") or clue.strip()
             return "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(query)
 
+        self.answer_area.setOpenExternalLinks(True)
+        self.answer_area.setOpenLinks(False)
+        self.answer_area.setTextInteractionFlags(Qt.TextBrowserInteraction)
         self.answer_area.setMinimumHeight(300)
         self.answer_area.setMaximumHeight(520)
         self.answer_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -1312,6 +1318,9 @@ Return only the answer, with no meta commentary.
         result = re.sub(r"(?<!\*)\*\*(.*?)\*\*(?!\*)", r"\1", result)
         result = re.sub(r"(?m)^\s*#{1,6}\s+", "", result)
         # Ordinary feature responses are literal text; only Easter-egg history uses rich links.
+        self.answer_area.setOpenExternalLinks(False)
+        self.answer_area.setOpenLinks(False)
+        self.answer_area.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.answer_area.setPlainText(result)
         self.answer_area.setMinimumHeight(190)
         self.answer_area.setMaximumHeight(320)
@@ -1441,6 +1450,10 @@ Return only the answer, with no meta commentary.
                 raise RuntimeError("VLC could not start playback.")
             self.current_path = source
             self.current_source_is_url = is_url
+            self.current_youtube_separate_streams = bool(audio_source)
+            self.answer_area.setOpenExternalLinks(False)
+            self.answer_area.setOpenLinks(False)
+            self.answer_area.setTextInteractionFlags(Qt.TextSelectableByMouse)
             clean_title = display_title or self._trim_movie_title(playlist_source or source)
             self.movie_title = clean_title
             self.subtitle_context.clear()
@@ -1793,12 +1806,28 @@ Return only the answer, with no meta commentary.
             return
         try:
             rate = float(value.rstrip("x"))
+            # YouTube often supplies separate video and audio URLs. VLC's input-slave
+            # audio can drift from the primary video when playback rate changes, especially
+            # at very low rates. Keep these streams synchronized rather than freezing or
+            # playing out of sync; local files and single-stream media retain speed control.
+            if self.current_youtube_separate_streams and abs(rate - 1.0) > 0.001:
+                self.speed_combo.blockSignals(True)
+                self.speed_combo.setCurrentText("1.0x")
+                self.speed_combo.blockSignals(False)
+                self._set_status("YOUTUBE SPEED CHANGE UNAVAILABLE FOR SEPARATE AUDIO/VIDEO — KEPT AT 1.0X")
+                return
             result = self.player.set_rate(rate)
             if result == -1:
                 self._set_status("PLAYBACK SPEED NOT SUPPORTED BY THIS STREAM")
+                self.speed_combo.blockSignals(True)
+                self.speed_combo.setCurrentText("1.0x")
+                self.speed_combo.blockSignals(False)
             else:
                 self._set_status(f"PLAYBACK SPEED · {value}")
         except Exception:
+            self.speed_combo.blockSignals(True)
+            self.speed_combo.setCurrentText("1.0x")
+            self.speed_combo.blockSignals(False)
             self._set_status("COULD NOT CHANGE PLAYBACK SPEED")
 
     def _set_volume(self, value: int) -> None:
