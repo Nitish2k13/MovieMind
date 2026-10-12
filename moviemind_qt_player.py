@@ -1362,7 +1362,7 @@ Return only the answer, with no meta commentary.
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             options = {
-                "format": "best[protocol^=http][vcodec!=none][acodec!=none]/best[protocol^=http]/best",
+                "format": "best[ext=mp4]/best",
                 "quiet": True,
                 "no_warnings": True,
                 "noplaylist": True,
