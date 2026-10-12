@@ -472,6 +472,9 @@ class MovieMindQtPlayer(QMainWindow):
         needs_input = mode in ("Ask a question", "Explain a word")
         self.ai_input.setVisible(needs_input)
         self.ai_submit.setVisible(needs_input)
+        # Keep the shared input clean when moving between question and word modes.
+        if mode in ("Ask a question", "Explain a word"):
+            self.ai_input.clear()
         if mode == "Ask a question":
             self.ai_input.setPlaceholderText("Ask a question about this movie…")
             self.ai_submit.setText("Ask MovieMind")
@@ -487,6 +490,10 @@ class MovieMindQtPlayer(QMainWindow):
 
     def _start_online_research(self) -> None:
         """Start the existing Easter-egg research pipeline without changing its research logic."""
+        # Do not let a queued offline language-refresh timer run during online research.
+        # This request uses the language selected at the moment the user clicked the feature.
+        self._language_refresh_timer.stop()
+        self._language_refresh_pending = False
         if not self.movie_title:
             self.answer_area.setPlainText("Open a movie and check its title first.")
             return
@@ -689,7 +696,11 @@ class MovieMindQtPlayer(QMainWindow):
                 "Type a question." if mode == "Ask a question" else "Type the word or phrase to explain."
             )
             return
+        # _ask_ai reads the text synchronously before starting its worker thread,
+        # so clear the field after dispatch to avoid leaving the old query visible.
         self._ask_ai()
+        if self.ai_request_running and mode in ("Ask a question", "Explain a word"):
+            self.ai_input.clear()
 
     @staticmethod
     def _parse_subtitle_file(path: str) -> list[dict[str, object]]:
