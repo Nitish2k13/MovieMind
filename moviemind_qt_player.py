@@ -916,10 +916,15 @@ class MovieMindQtPlayer(QMainWindow):
                 and str(item.get("text", "")).strip()
             ]
             if not active_subtitles and not visual_subtitle:
-                self.answer_area.setPlainText("Pick a scene with subtitle to explain the dialogue.")
+                self.answer_area.setPlainText(
+                    "I couldn't read the visible subtitle from the current frame yet. "
+                    "If this is an embedded subtitle, let playback run for 2–3 seconds and select "
+                    "Explain dialogue again so MovieMind can OCR it. You can also load the movie's "
+                    "SRT subtitle file with Load SRT for more reliable dialogue context."
+                )
                 self.answer_area.setMinimumHeight(110)
                 self.answer_area.setMaximumHeight(180)
-                self._set_status("SUBTITLE REQUIRED")
+                self._set_status("WAITING FOR SUBTITLE OCR OR SRT")
                 return
         memory = "\n".join(
             f"[{item['time']}] User asked ({item['mode']}): {item['question']}\n"
@@ -1104,10 +1109,14 @@ Return only the answer, with no meta commentary.
                 "with a specific franchise connection. Do NOT list generic furniture (ordinary sofas, lamps, "
                 "bookshelves, carpets, stairs) unless a unique marking or design makes it specifically meaningful. "
                 "Ignore subtitles and player UI. First describe what is plainly visible; do not infer hidden meaning. "
-                "Only state a color when it is clear in the frame; if uncertain, omit the color. Never invent a blue "
-                "lamp or other color/detail that is not plainly visible. Do not identify characters unless highly "
-                "confident from visual evidence and movie context. Return one short line per clue, or say no "
-                "distinctive movie-specific clue is visible. These are candidates, not confirmed Easter eggs."
+                "Only state a color when it is clear in the frame; if uncertain, omit the color. Never invent an object "
+                "or color. Identify the character using the face, hair, costume, and the exact movie context; do not "
+                "guess Doctor Strange, Thanos, Loki, or another character from an object color alone. If identity is "
+                "uncertain, explicitly say 'unidentified character' rather than guessing. Do not equate every blue "
+                "glowing object with the Space Stone: distinguish the Tesseract (a blue cube) from the blue Space Stone "
+                "inside it, and only name an artifact when its visible shape and movie context support that name. "
+                "Return one short line per clue, or say no distinctive movie-specific clue is visible. These are "
+                "candidates, not confirmed Easter eggs."
             )
             payload = json.dumps({
                 "model": "gemma3:4b", "prompt": vision_prompt, "images": [image_b64],
