@@ -935,7 +935,7 @@ class MovieMindQtPlayer(QMainWindow):
                                 0, int(frame.height * 0.65), frame.width, int(frame.height * 0.97)
                             ))
                             ocr_text = re.sub(
-                                r"\\s+", " ",
+                                r"\s+", " ",
                                 pytesseract.image_to_string(
                                     subtitle_band, lang="eng", config="--psm 6"
                                 )
@@ -1397,7 +1397,7 @@ Return only the answer, with no meta commentary.
         self.answer_area.setOpenExternalLinks(False)
         self.answer_area.setOpenLinks(False)
         self.answer_area.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        safe_result = html.escape(result).replace("\\n", "<br>")
+        safe_result = html.escape(result).replace("\n", "<br>")
         self.answer_area.setHtml(
             '<div style="color:#eaf3ff; text-decoration:none; font-weight:normal;">'
             + safe_result + '</div>'
