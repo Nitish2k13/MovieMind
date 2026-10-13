@@ -915,16 +915,50 @@ class MovieMindQtPlayer(QMainWindow):
                 if int(item["start_ms"]) <= current_ms <= int(item["end_ms"])
                 and str(item.get("text", "")).strip()
             ]
+            if not active_subtitles and not visual_subtitle and pytesseract and Image:
+                # Embedded VLC subtitles are not always present in the SRT context.
+                # On demand, capture one frame and OCR only the lower subtitle band.
+                snapshot_path = str(
+                    Path(tempfile.gettempdir()) / f"moviemind_dialogue_ocr_{uuid.uuid4().hex}.png"
+                )
+                try:
+                    snapshot_result = self.player.video_take_snapshot(0, snapshot_path, 0, 0)
+                    if snapshot_result != -1:
+                        for _ in range(12):
+                            if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
+                                break
+                            time.sleep(0.08)
+                        if os.path.exists(snapshot_path) and os.path.getsize(snapshot_path) > 0:
+                            with Image.open(snapshot_path) as source:
+                                frame = source.convert("RGB")
+                            subtitle_band = frame.crop((
+                                0, int(frame.height * 0.65), frame.width, int(frame.height * 0.97)
+                            ))
+                            ocr_text = re.sub(
+                                r"\\s+", " ",
+                                pytesseract.image_to_string(
+                                    subtitle_band, lang="eng", config="--psm 6"
+                                )
+                            ).strip()
+                            if ocr_text and len(ocr_text) >= 3:
+                                current_subtitle = ocr_text[:350]
+                                visual_subtitle = current_subtitle
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        if os.path.exists(snapshot_path):
+                            os.remove(snapshot_path)
+                    except OSError:
+                        pass
             if not active_subtitles and not visual_subtitle:
                 self.answer_area.setPlainText(
-                    "I couldn't read the visible subtitle from the current frame yet. "
-                    "If this is an embedded subtitle, let playback run for 2–3 seconds and select "
-                    "Explain dialogue again so MovieMind can OCR it. You can also load the movie's "
-                    "SRT subtitle file with Load SRT for more reliable dialogue context."
+                    "I couldn't read a subtitle from the current frame. Make sure the subtitle is visible, "
+                    "then try again, or load the movie's SRT file with Load SRT for reliable dialogue context."
                 )
                 self.answer_area.setMinimumHeight(110)
                 self.answer_area.setMaximumHeight(180)
-                self._set_status("WAITING FOR SUBTITLE OCR OR SRT")
+                self._set_status("SUBTITLE NOT DETECTED")
                 return
         memory = "\n".join(
             f"[{item['time']}] User asked ({item['mode']}): {item['question']}\n"
@@ -1358,11 +1392,16 @@ Return only the answer, with no meta commentary.
         result = re.sub(r"\[([^\]]+)\]\(https?://[^)]+\)", r"\1", result)
         result = re.sub(r"(?<!\*)\*\*(.*?)\*\*(?!\*)", r"\1", result)
         result = re.sub(r"(?m)^\s*#{1,6}\s+", "", result)
-        # Ordinary feature responses are literal text; only Easter-egg history uses rich links.
+        # Render normal responses as explicitly styled escaped HTML so they cannot
+        # inherit the blue/underlined appearance of Easter-egg hyperlinks.
         self.answer_area.setOpenExternalLinks(False)
         self.answer_area.setOpenLinks(False)
         self.answer_area.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.answer_area.setPlainText(result)
+        safe_result = html.escape(result).replace("\\n", "<br>")
+        self.answer_area.setHtml(
+            '<div style="color:#eaf3ff; text-decoration:none; font-weight:normal;">'
+            + safe_result + '</div>'
+        )
         self.answer_area.setMinimumHeight(190)
         self.answer_area.setMaximumHeight(320)
         self._set_status("ANSWER READY")
