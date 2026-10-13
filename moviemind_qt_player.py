@@ -577,32 +577,44 @@ class MovieMindQtPlayer(QMainWindow):
         import html
         import urllib.parse
 
-        def clue_image_query(clue: str) -> str:
-            query = re.sub(r"(?i)^(?:the|a|an)\s+", "", clue.strip())
-            query = query.strip(" \t.'\"“”‘’")
-            # Search the named object/brand, not a movie-wide phrase or the whole sentence.
-            query = re.sub(
-                r"(?i)\s+(?:logo|symbol|emblem)\s+(?:displayed\s+)?(?:on|in)\s+(?:the\s+)?(?:phone|screen|device)$",
-                "", query,
-            )
-            query = re.sub(r"(?i)^contact\s+name\s+", "", query)
-            query = re.sub(r"(?i)\s+(?:game\s+)?cabinet$", "", query)
-            query = re.sub(
-                r"(?i)\s+(?:displayed|shown|visible)\s+(?:on|in)\s+(?:the\s+)?(?:phone|screen|device)$",
-                "", query,
-            )
-            query = re.sub(r"(?i)\s+(?:game|arcade)\s+(?:cabinet|machine)$", "", query)
-            query = query.strip(" .,:;-") or clue.strip()
-            # For common logo clues, search the logo name itself (e.g. "NYPD"),
-            # not a full sentence such as "NYPD logo is a clear visual element".
-            logo_match = re.match(r"(?i)^([A-Z0-9][A-Z0-9 .&'-]{0,35}?)\\s+(?:logo|symbol|emblem)\\b", query)
-            if logo_match:
-                query = logo_match.group(1).strip(" .,:;-")
-            return "https://www.google.com/search?" + urllib.parse.urlencode({"tbm": "isch", "q": query})
+        def clue_image_query(clue: str, connection: str = "") -> str:
+            """Search the identified Easter-egg subject, not a vague visual description."""
+            clue_text = clue.strip().strip(" \t.'\"“”‘’")
+            connection_text = connection.strip()
 
-        # Open clicked links through the OS browser explicitly. With automatic
-        # QTextBrowser navigation disabled, anchorClicked is handled by the connection
-        # installed once when the widget is created.
+            # Prefer the named reference identified by the research. For example:
+            # Tesseract -> Avengers Infinity War Tesseract;
+            # Nova Corps emblem -> Marvel Nova Corps;
+            # Reality Stone -> Avengers Infinity War Reality Stone.
+            candidates = [
+                (r"(?i)\b(tesseract)\b", "Tesseract"),
+                (r"(?i)\b(nova\s+corps)\b", "Nova Corps"),
+                (r"(?i)\b(reality\s+stone)\b", "Reality Stone"),
+                (r"(?i)\b(power\s+stone)\b", "Power Stone"),
+                (r"(?i)\b(space\s+stone)\b", "Space Stone"),
+                (r"(?i)\b(time\s+stone)\b", "Time Stone"),
+                (r"(?i)\b(mind\s+stone)\b", "Mind Stone"),
+                (r"(?i)\b(soul\s+stone)\b", "Soul Stone"),
+            ]
+            identified = ""
+            for pattern, canonical_name in candidates:
+                if re.search(pattern, connection_text):
+                    identified = canonical_name
+                    break
+
+            movie = getattr(self, "movie_title", "") or ""
+            if identified == "Nova Corps":
+                query = "Marvel Nova Corps"
+            elif identified:
+                query = f"{movie} {identified}".strip()
+            else:
+                # If the explanation doesn't identify a known reference, don't
+                # invent one: fall back to the original clue description.
+                query = clue_text
+            return "https://www.google.com/search?" + urllib.parse.urlencode(
+                {"tbm": "isch", "q": query}
+            )
+
         self.answer_area.setOpenExternalLinks(False)
         self.answer_area.setOpenLinks(False)
         self.answer_area.setTextInteractionFlags(Qt.TextBrowserInteraction)
@@ -619,13 +631,24 @@ class MovieMindQtPlayer(QMainWindow):
             # Rebuild the image link from each displayed Clue line. This prevents the model
             # from returning a movie-wide URL or a malformed, non-clickable URL.
             result_lines = []
-            for line in item["result"].splitlines():
+            source_lines = item["result"].splitlines()
+            for line_index, line in enumerate(source_lines):
                 if re.match(r"(?i)^\s*google\s+images\s*:", line):
                     continue
                 result_lines.append(line)
                 clue_match = re.match(r"(?i)^\s*clue\s*:\s*(.+?)\s*$", line)
                 if clue_match:
-                    url = clue_image_query(clue_match.group(1))
+                    # Use the research's interpretation to search for the named
+                    # Easter egg, rather than the full visual description.
+                    connection = ""
+                    for later_line in source_lines[line_index + 1:]:
+                        possible = re.match(r"(?i)^\s*possible connection\s*:\s*(.+?)\s*$", later_line)
+                        if possible:
+                            connection = possible.group(1)
+                            break
+                        if re.match(r"(?i)^\s*clue\s*:", later_line):
+                            break
+                    url = clue_image_query(clue_match.group(1), connection)
                     result_lines.append(f"GOOGLE_IMAGES_LINK: {url}")
             body = html.escape("\n".join(result_lines))
             # Turn the marker into a descriptive hyperlink; QTextBrowser opens it externally.
