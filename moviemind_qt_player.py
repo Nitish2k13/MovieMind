@@ -1026,10 +1026,25 @@ class MovieMindQtPlayer(QMainWindow):
             question_for_memory = user_input
         else:
             task = (
-                f"Answer this question about the movie generally: {user_input}\n"
-                "Answer from general movie knowledge available in the local model. Do not assume the user asks "
-                "about the current scene unless stated. Do not browse or call an online service. If uncertain, "
-                "state that briefly rather than inventing a specific fact."
+                f"Answer the user's exact question: {user_input}\n"
+                "Be a careful movie Q&A assistant, not a guess generator. Start with a direct answer, then give "
+                "one or two short sentences explaining the evidence or relevant context. Decide whether the user "
+                "is asking about the current frame/scene or about the movie generally: if the question refers to "
+                "a person, object, line, or event visible/heard now (for example 'is that Stan Lee?'), use the "
+                "fresh current frame plus the current and nearby subtitles, and connect them to reliable "
+                "movie-specific knowledge. If the question is general (for example the director or ending), "
+                "answer at movie level instead of forcing the current frame into it. Never answer a question "
+                "about a visible cameo with a broad claim that the person does not appear anywhere in the film. "
+                "Do not identify someone solely because they look old, wear a certain costume, or resemble a "
+                "familiar actor; use scene context and the exact dialogue as corroboration. Do not invent a role, "
+                "quote, source, or plot detail. If the frame and your movie knowledge do not establish the answer, "
+                "say what is uncertain and why. Do not browse, call an online service, or claim you verified "
+                "anything online. Keep the answer concise and avoid repeating the question.\n"
+                "MOVIE-SPECIFIC FACT CHECK: In Avengers: Infinity War (2018), Stan Lee has a cameo as the bus "
+                "driver who says, 'What's the matter with you kids? You never seen a spaceship before?' If the "
+                "current frame and subtitle match this bus-driver scene, answer that the driver is Stan Lee; "
+                "do not claim Stan Lee does not appear in the film. Apply this fact only when the movie and scene "
+                "actually match."
             )
             question_for_memory = user_input
 
