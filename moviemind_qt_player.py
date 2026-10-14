@@ -1470,7 +1470,81 @@ Return only the answer, with no meta commentary.
         if self._is_youtube_url(url):
             self._play_youtube_url(url)
             return
-        self._play_media_source(url, is_url=True)
+        # A webpage URL is not automatically a playable video stream. Resolve normal
+        # video pages through yt-dlp; pass known direct media URLs straight to VLC.
+        direct_media_suffixes = (
+            ".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi", ".wmv",
+            ".m3u8", ".mpd", ".ts", ".mp3", ".m4a", ".aac", ".ogg", ".wav",
+        )
+        path_lower = parsed.path.lower()
+        if path_lower.endswith(direct_media_suffixes):
+            self._play_media_source(url, is_url=True)
+        else:
+            self._play_webpage_url(url)
+
+    def _play_webpage_url(self, url: str) -> None:
+        """Resolve a supported video webpage before changing the active movie/session."""
+        try:
+            import yt_dlp
+        except ImportError:
+            QMessageBox.warning(
+                self, "Online page playback needs yt-dlp",
+                "This URL looks like a webpage, not a direct media file. Install the URL resolver with:\n\n"
+                "python -m pip install -r requirements-qt.txt"
+            )
+            self._set_status("WEBPAGE URL NEEDS RESOLVER")
+            return
+
+        self._set_status("RESOLVING VIDEO PAGE…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            options = {
+                "format": "best[height<=480][acodec!=none][vcodec!=none]/best[height<=480]/best",
+                "quiet": True,
+                "no_warnings": True,
+                "noplaylist": True,
+                "skip_download": True,
+            }
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(url, download=False)
+            if not info or info.get("_type") in ("playlist", "multi_video"):
+                raise RuntimeError("This URL did not resolve to one playable video.")
+            title = info.get("title") or self._trim_movie_title(url)
+            requested_formats = info.get("requested_formats") or []
+            video_format = next(
+                (item for item in requested_formats if item.get("vcodec") not in (None, "none")),
+                None,
+            )
+            audio_format = next(
+                (item for item in requested_formats if item.get("acodec") not in (None, "none")),
+                None,
+            )
+            if video_format and audio_format:
+                self._play_media_source(
+                    video_format["url"], is_url=True, playlist_source=url,
+                    display_title=title, audio_source=audio_format["url"],
+                )
+                return
+            stream_url = info.get("url")
+            if not stream_url:
+                raise RuntimeError(
+                    "The site did not expose a playable stream to yt-dlp. It may be unsupported, "
+                    "require browser-only playback, or use protected media."
+                )
+            self._play_media_source(
+                stream_url, is_url=True, playlist_source=url, display_title=title,
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Could not resolve video page",
+                "MovieMind could not find a playable video stream on this webpage, so it has not "
+                "changed the current movie title. The site may be unsupported or use browser-only/"
+                "protected playback. Try a direct video URL or a supported video page.\n\n"
+                + str(exc)
+            )
+            self._set_status("VIDEO PAGE NOT RESOLVED")
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def _play_youtube_url(self, url: str) -> None:
         """Resolve a YouTube page to a playable stream using yt-dlp, then hand it to VLC."""
