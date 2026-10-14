@@ -3,3 +3,4 @@ python-vlc>=3.0.20123
 Pillow>=10.0,<13.0
 pytesseract>=0.3.10,<1.0
 yt-dlp>=2025.1.15
+PySide6-WebEngine>=6.7,<7.0
