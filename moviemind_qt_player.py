@@ -33,6 +33,11 @@ except ImportError:
 
 from PySide6.QtCore import Qt, QTimer, QObject, QEvent, Signal, QUrl
 from PySide6.QtGui import QAction, QKeySequence, QCursor, QDesktopServices
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+except ImportError:
+    QWebEngineView = None
+
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QMenu, QMessageBox, QPushButton, QSizePolicy, QSlider, QVBoxLayout,
@@ -207,6 +212,11 @@ class MovieMindQtPlayer(QMainWindow):
         action.triggered.connect(callback)
         self.addAction(action)
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self.browser_panel is not None:
+            self.browser_panel.setGeometry(self.video_surface.rect())
+
     def _escape_fullscreen(self) -> None:
         if self.isFullScreen():
             self.toggle_fullscreen()
@@ -248,6 +258,26 @@ class MovieMindQtPlayer(QMainWindow):
         self.video_surface.setMinimumSize(560, 320)
         self.video_surface.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video_surface.setStyleSheet("background:#02060c; border:1px solid #1b3552; border-radius:14px;")
+        self.browser_panel = None
+        self.browser_view = None
+        if QWebEngineView is not None:
+            # Keep website playback inside MovieMind; hide this overlay again for VLC media.
+            self.browser_panel = QWidget(self.video_surface)
+            self.browser_panel.setObjectName("embeddedBrowserPanel")
+            browser_layout = QVBoxLayout(self.browser_panel)
+            browser_layout.setContentsMargins(0, 0, 0, 0)
+            browser_layout.setSpacing(0)
+            browser_toolbar = QHBoxLayout()
+            browser_toolbar.setContentsMargins(8, 6, 8, 6)
+            browser_toolbar.addStretch()
+            self.browser_back_button = QPushButton("← Back to MovieMind player")
+            self.browser_back_button.clicked.connect(self._close_embedded_browser)
+            browser_toolbar.addWidget(self.browser_back_button)
+            browser_layout.addLayout(browser_toolbar)
+            self.browser_view = QWebEngineView(self.browser_panel)
+            browser_layout.addWidget(self.browser_view, 1)
+            self.browser_panel.setGeometry(self.video_surface.rect())
+            self.browser_panel.hide()
         left.addWidget(self.video_surface, 1)
 
         deck = QFrame()
@@ -1482,8 +1512,31 @@ Return only the answer, with no meta commentary.
         else:
             self._play_webpage_url(url)
 
+    def _close_embedded_browser(self) -> None:
+        """Hide the website overlay and return to MovieMind's VLC video surface."""
+        if self.browser_panel is not None:
+            self.browser_panel.hide()
+        self._set_status("PLAYER READY")
+
     def _open_webpage_in_browser(self, url: str, reason: str) -> None:
-        """Open site-native players in the default browser instead of misrouting them to VLC."""
+        """Load a webpage inside MovieMind when Qt WebEngine is available."""
+        if self.browser_view is not None and self.browser_panel is not None:
+            try:
+                self.browser_panel.setGeometry(self.video_surface.rect())
+                self.browser_panel.show()
+                self.browser_panel.raise_()
+                self.browser_view.setUrl(QUrl(url))
+                self.answer_area.setPlainText(
+                    "Loading this website inside MovieMind. Sign in on the site if required.\n\n"
+                    + reason
+                    + "\n\nIf the website's video player is incompatible with the embedded browser, "
+                    "it may still show a black screen. Protected streaming services may require "
+                    "browser DRM support that MovieMind's embedded browser does not provide."
+                )
+                self._set_status("OPENING WEBSITE INSIDE MOVIEMIND")
+                return
+            except Exception as exc:
+                reason = reason + " Embedded browser failed: " + str(exc)
         opened = QDesktopServices.openUrl(QUrl(url))
         if opened:
             self.answer_area.setPlainText(
@@ -1633,6 +1686,8 @@ Return only the answer, with no meta commentary.
         self, source: str, is_url: bool, playlist_source: str | None = None,
         display_title: str | None = None, audio_source: str | None = None
     ) -> None:
+        if self.browser_panel is not None:
+            self.browser_panel.hide()
         if is_url and self._is_youtube_url(source) and playlist_source is None:
             self._play_youtube_url(source)
             return
