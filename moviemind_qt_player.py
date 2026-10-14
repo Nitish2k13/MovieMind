@@ -31,7 +31,7 @@ try:
 except ImportError:
     pytesseract = None
 
-from PySide6.QtCore import Qt, QTimer, QObject, QEvent, Signal
+from PySide6.QtCore import Qt, QTimer, QObject, QEvent, Signal, QUrl
 from PySide6.QtGui import QAction, QKeySequence, QCursor, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -1482,8 +1482,44 @@ Return only the answer, with no meta commentary.
         else:
             self._play_webpage_url(url)
 
+    def _open_webpage_in_browser(self, url: str, reason: str) -> None:
+        """Open site-native players in the default browser instead of misrouting them to VLC."""
+        opened = QDesktopServices.openUrl(QUrl(url))
+        if opened:
+            self.answer_area.setPlainText(
+                "Opened this website in your default browser. Use the website's own player there.\n\n"
+                + reason
+                + "\n\nProtected streaming services such as Netflix and Prime Video cannot be "
+                "played as ordinary VLC stream URLs."
+            )
+            self._set_status("WEBSITE OPENED IN BROWSER")
+        else:
+            QMessageBox.warning(
+                self, "Could not open browser",
+                "Windows could not open this URL automatically. Copy this URL into Chrome or Edge:\n\n"
+                + url + "\n\n" + reason
+            )
+            self._set_status("BROWSER OPEN FAILED")
+
+    @staticmethod
+    def _requires_site_browser(url: str) -> bool:
+        host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+        return (
+            host == "netflix.com" or host.endswith(".netflix.com")
+            or host == "primevideo.com" or host.endswith(".primevideo.com")
+            or host == "amazon.com" or host.endswith(".amazon.com")
+            or host == "hotstar.com" or host.endswith(".hotstar.com")
+            or host == "jiohotstar.com" or host.endswith(".jiohotstar.com")
+        )
+
     def _play_webpage_url(self, url: str) -> None:
-        """Resolve a supported video webpage before changing the active movie/session."""
+        """Resolve supported pages; use the site's browser player when extraction is unavailable."""
+        if self._requires_site_browser(url):
+            self._open_webpage_in_browser(
+                url,
+                "This streaming service needs its supported browser player and account sign-in.",
+            )
+            return
         try:
             import yt_dlp
         except ImportError:
@@ -1535,14 +1571,14 @@ Return only the answer, with no meta commentary.
                 stream_url, is_url=True, playlist_source=url, display_title=title,
             )
         except Exception as exc:
-            QMessageBox.warning(
-                self, "Could not resolve video page",
-                "MovieMind could not find a playable video stream on this webpage, so it has not "
-                "changed the current movie title. The site may be unsupported or use browser-only/"
-                "protected playback. Try a direct video URL or a supported video page.\n\n"
-                + str(exc)
+            # Unsupported pages often have their own JavaScript player. Hand the original
+            # URL to the default browser instead of leaving MovieMind on a black screen.
+            self._open_webpage_in_browser(
+                url,
+                "MovieMind could not extract a VLC-compatible stream (" + str(exc) + "). "
+                "The website may need its own browser player. The MovieMind video panel "
+                "will not display this browser playback.",
             )
-            self._set_status("VIDEO PAGE NOT RESOLVED")
         finally:
             QApplication.restoreOverrideCursor()
 
