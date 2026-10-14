@@ -35,8 +35,11 @@ from PySide6.QtCore import Qt, QTimer, QObject, QEvent, Signal, QUrl
 from PySide6.QtGui import QAction, QKeySequence, QCursor, QDesktopServices
 try:
     from PySide6.QtWebEngineWidgets import QWebEngineView
+    from PySide6.QtWebEngineCore import QWebEngineScript, QWebEngineUrlRequestInterceptor
 except ImportError:
     QWebEngineView = None
+    QWebEngineScript = None
+    QWebEngineUrlRequestInterceptor = None
 
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -83,6 +86,51 @@ QMenu { background: #10213a; color: #eaf3ff; border: 1px solid #2a4b70; padding:
 QMenu::item { padding: 9px 22px; border-radius: 6px; }
 QMenu::item:selected { background: #176fd0; }
 """
+
+
+if QWebEngineUrlRequestInterceptor is not None:
+    class NetmirrorRequestInterceptor(QWebEngineUrlRequestInterceptor):
+        """Port the extension's narrow default Referer rule into the embedded browser."""
+
+        def interceptRequest(self, info) -> None:
+            # The supplied extension changes Referer only for requests containing this
+            # filter string; do not copy its popup's arbitrary all-sites header rules.
+            if "hakunaymatata" in info.requestUrl().toString().lower():
+                info.setHttpHeader(b"Referer", b"https://movieboxonline.net/")
+
+
+def _install_netmirror_compatibility(view) -> None:
+    """Install the extension's header rule and its documented page-detection handshake."""
+    if QWebEngineScript is None or QWebEngineUrlRequestInterceptor is None:
+        return
+    profile = view.page().profile()
+    interceptor = NetmirrorRequestInterceptor(profile)
+    profile.setUrlRequestInterceptor(interceptor)
+    # Keep a Python reference for the lifetime of the profile.
+    view._netmirror_request_interceptor = interceptor
+
+    # The extension's content.js responds to this message so the site can detect it.
+    # Limit the compatibility shim to NetMirror pages rather than all websites.
+    script = QWebEngineScript()
+    script.setName("MovieMind NetMirror compatibility")
+    script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+    script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+    script.setRunsOnSubFrames(True)
+    script.setSourceCode("""
+(function () {
+  if (!/\\bnetmirror\\./i.test(location.hostname)) return;
+  window.addEventListener("message", function (event) {
+    if (event.source !== window) return;
+    if (event.data && event.data.type === "NETMIRROR_CHECK") {
+      window.postMessage({
+        type: "NETMIRROR_EXTENSION_DETECTED",
+        installed: true
+      }, "*");
+    }
+  });
+})();
+""")
+    view.page().scripts().insert(script)
 
 
 class AIResultBridge(QObject):
@@ -270,6 +318,7 @@ class MovieMindQtPlayer(QMainWindow):
             browser_toolbar.addWidget(self.browser_back_button)
             browser_layout.addLayout(browser_toolbar)
             self.browser_view = QWebEngineView(self.browser_panel)
+            _install_netmirror_compatibility(self.browser_view)
             browser_layout.addWidget(self.browser_view, 1)
             self.browser_panel.setGeometry(self.video_surface.rect())
             self.browser_panel.hide()
