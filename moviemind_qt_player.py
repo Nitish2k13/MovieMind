@@ -212,11 +212,6 @@ class MovieMindQtPlayer(QMainWindow):
         action.triggered.connect(callback)
         self.addAction(action)
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        if self.browser_panel is not None:
-            self.browser_panel.setGeometry(self.video_surface.rect())
-
     def _escape_fullscreen(self) -> None:
         if self.isFullScreen():
             self.toggle_fullscreen()
@@ -2282,6 +2277,8 @@ Return only the answer, with no meta commentary.
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        if self.browser_panel is not None:
+            self.browser_panel.setGeometry(self.video_surface.rect())
         if self.isFullScreen():
             self._position_fullscreen_overlay()
             self._position_fullscreen_title()
