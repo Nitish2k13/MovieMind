@@ -118,16 +118,56 @@ def _install_netmirror_compatibility(view) -> None:
     script.setRunsOnSubFrames(True)
     script.setSourceCode("""
 (function () {
-  if (!/\\bnetmirror\\./i.test(location.hostname)) return;
-  window.addEventListener("message", function (event) {
-    if (event.source !== window) return;
-    if (event.data && event.data.type === "NETMIRROR_CHECK") {
-      window.postMessage({
-        type: "NETMIRROR_EXTENSION_DETECTED",
-        installed: true
-      }, "*");
-    }
-  });
+  if (!window.__moviemindMediaBridgeInstalled) {
+    window.__moviemindMediaBridgeInstalled = true;
+    window.__moviemindMediaCandidates = window.__moviemindMediaCandidates || [];
+    window.addEventListener("message", function (event) {
+      const data = event && event.data;
+      if (data && data.type === "MOVIEMIND_MEDIA_CANDIDATE" &&
+          typeof data.url === "string" && /^https?:/i.test(data.url)) {
+        const list = window.__moviemindMediaCandidates;
+        if (!list.some(item => item.url === data.url)) {
+          list.push(data);
+          while (list.length > 10) list.shift();
+        }
+      }
+    });
+  }
+  if (/\\bnetmirror\\./i.test(location.hostname)) {
+    window.addEventListener("message", function (event) {
+      if (event.source === window && event.data &&
+          event.data.type === "NETMIRROR_CHECK") {
+        window.postMessage({
+          type: "NETMIRROR_EXTENSION_DETECTED",
+          installed: true
+        }, "*");
+      }
+    });
+  }
+  // The website may place its player in a cross-origin iframe. Each injected
+  // frame reports only its current media URL to the top frame; it does not
+  // inspect cookies, local storage, or unrelated request headers.
+  function reportVideo() {
+    try {
+      const videos = Array.from(document.querySelectorAll("video"));
+      for (const video of videos) {
+        const source = video.querySelector("source");
+        const url = video.currentSrc || (source && source.src) || "";
+        if (!/^https?:/i.test(url)) continue;
+        const candidate = {
+          type: "MOVIEMIND_MEDIA_CANDIDATE",
+          url: url,
+          referer: location.href,
+          userAgent: navigator.userAgent,
+          title: document.title || ""
+        };
+        if (window === window.top) window.postMessage(candidate, "*");
+        else window.top.postMessage(candidate, "*");
+      }
+    } catch (_) {}
+  }
+  reportVideo();
+  window.setInterval(reportVideo, 1200);
 })();
 """)
     view.page().scripts().insert(script)
@@ -303,6 +343,11 @@ class MovieMindQtPlayer(QMainWindow):
         self.video_surface.setStyleSheet("background:#02060c; border:1px solid #1b3552; border-radius:14px;")
         self.browser_panel = None
         self.browser_view = None
+        self._latest_browser_media_candidate = None
+        self._browser_media_poll = QTimer(self)
+        self._browser_media_poll.setInterval(1500)
+        self._browser_media_poll.timeout.connect(self._poll_embedded_media_candidates)
+        self._browser_media_poll.start()
         if QWebEngineView is not None:
             # Keep website playback inside MovieMind; hide this overlay again for VLC media.
             self.browser_panel = QWidget(self.video_surface)
@@ -312,6 +357,12 @@ class MovieMindQtPlayer(QMainWindow):
             browser_layout.setSpacing(0)
             browser_toolbar = QHBoxLayout()
             browser_toolbar.setContentsMargins(8, 6, 8, 6)
+            self.browser_play_detected_button = QPushButton("▶ Play detected video in MovieMind")
+            self.browser_play_detected_button.setToolTip(
+                "Use the website's selected video stream with MovieMind's VLC player"
+            )
+            self.browser_play_detected_button.clicked.connect(self._play_detected_browser_media)
+            browser_toolbar.addWidget(self.browser_play_detected_button)
             browser_toolbar.addStretch()
             self.browser_back_button = QPushButton("← Back to MovieMind player")
             self.browser_back_button.clicked.connect(self._close_embedded_browser)
@@ -1556,6 +1607,60 @@ Return only the answer, with no meta commentary.
         else:
             self._play_webpage_url(url)
 
+    def _poll_embedded_media_candidates(self) -> None:
+        """Read media URLs reported by the active website frame, if any."""
+        if not self.browser_view or not self.browser_panel or not self.browser_panel.isVisible():
+            return
+        self.browser_view.page().runJavaScript(
+            "Array.isArray(window.__moviemindMediaCandidates) ? "
+            "window.__moviemindMediaCandidates.slice(-10) : []",
+            self._receive_embedded_media_candidates,
+        )
+
+    def _receive_embedded_media_candidates(self, candidates) -> None:
+        if not isinstance(candidates, list):
+            return
+        usable = [
+            item for item in candidates
+            if isinstance(item, dict)
+            and isinstance(item.get("url"), str)
+            and item["url"].startswith(("http://", "https://"))
+            and any(token in item["url"].lower() for token in
+                    (".mp4", ".m3u8", ".mpd", ".m4v", ".webm", ".ts", "hakunaymatata"))
+        ]
+        if usable:
+            self._latest_browser_media_candidate = usable[-1]
+            if hasattr(self, "browser_play_detected_button"):
+                self.browser_play_detected_button.setEnabled(True)
+                self.browser_play_detected_button.setToolTip(
+                    "A video URL was detected. Click to play it with MovieMind's VLC player."
+                )
+
+    def _play_detected_browser_media(self) -> None:
+        """Hand the selected website media URL to VLC, preserving useful HTTP headers."""
+        candidate = self._latest_browser_media_candidate
+        if not candidate:
+            self._poll_embedded_media_candidates()
+            self._set_status("WAITING FOR WEBSITE VIDEO — SELECT A SERVER FIRST")
+            QMessageBox.information(
+                self, "No video stream detected yet",
+                "Choose a working server on the website and wait until its video begins loading. "
+                "Then click this button again."
+            )
+            return
+        media_url = candidate.get("url", "")
+        referer = candidate.get("referer", "")
+        user_agent = candidate.get("userAgent", "")
+        if not media_url.startswith(("http://", "https://")):
+            self._set_status("DETECTED VIDEO URL IS NOT HTTP/HTTPS")
+            return
+        page_url = self.browser_view.url().toString() if self.browser_view else ""
+        title = candidate.get("title") or self._trim_movie_title(page_url or media_url)
+        self._play_media_source(
+            media_url, is_url=True, playlist_source=page_url or media_url,
+            display_title=title, http_referer=referer, http_user_agent=user_agent,
+        )
+
     def _close_embedded_browser(self) -> None:
         """Hide the website overlay and return to MovieMind's VLC video surface."""
         if self.browser_panel is not None:
@@ -1728,7 +1833,8 @@ Return only the answer, with no meta commentary.
 
     def _play_media_source(
         self, source: str, is_url: bool, playlist_source: str | None = None,
-        display_title: str | None = None, audio_source: str | None = None
+        display_title: str | None = None, audio_source: str | None = None,
+        http_referer: str | None = None, http_user_agent: str | None = None,
     ) -> None:
         if self.browser_panel is not None:
             self.browser_panel.hide()
@@ -1745,6 +1851,11 @@ Return only the answer, with no meta commentary.
                 # Moderate buffering helps recovery after seeks.
                 media.add_option(":network-caching=3000")
                 media.add_option(":live-caching=3000")
+            if http_referer:
+                # Some embedded video hosts require the page URL as the HTTP Referer.
+                media.add_option(":http-referrer=" + http_referer)
+            if http_user_agent:
+                media.add_option(":http-user-agent=" + http_user_agent)
             if audio_source:
                 # VLC supports secondary input streams through the input-slave media option.
                 media.add_option(":input-slave=" + audio_source)
