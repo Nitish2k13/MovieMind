@@ -359,8 +359,9 @@ class MovieMindQtPlayer(QMainWindow):
             browser_toolbar.setContentsMargins(8, 6, 8, 6)
             self.browser_play_detected_button = QPushButton("▶ Play detected video in MovieMind")
             self.browser_play_detected_button.setToolTip(
-                "Use the website's selected video stream with MovieMind's VLC player"
+                "Select a server on the website; this button becomes available when a video URL is detected"
             )
+            self.browser_play_detected_button.setEnabled(False)
             self.browser_play_detected_button.clicked.connect(self._play_detected_browser_media)
             browser_toolbar.addWidget(self.browser_play_detected_button)
             browser_toolbar.addStretch()
