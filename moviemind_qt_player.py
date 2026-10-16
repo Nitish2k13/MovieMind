@@ -1708,7 +1708,10 @@ Return only the answer, with no meta commentary.
     def _requires_site_browser(url: str) -> bool:
         host = (urlparse(url).hostname or "").lower().removeprefix("www.")
         return (
-            host == "netflix.com" or host.endswith(".netflix.com")
+            # NetMirror uses a JavaScript-driven website player; open its page in
+            # the embedded browser instead of trying generic yt-dlp extraction first.
+            host == "netmirror.center" or host.endswith(".netmirror.center")
+            or host == "netflix.com" or host.endswith(".netflix.com")
             or host == "primevideo.com" or host.endswith(".primevideo.com")
             or host == "amazon.com" or host.endswith(".amazon.com")
             or host == "hotstar.com" or host.endswith(".hotstar.com")
