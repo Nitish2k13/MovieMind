@@ -409,7 +409,10 @@ class MovieMindQtPlayer(QMainWindow):
                 )
                 self.browser_view.setPage(diagnostic_page)
                 diagnostic_page.loadStarted.connect(
-                    lambda: print("[MovieMind WebEngine] loadStarted", flush=True)
+                    lambda: print(
+                        f"[MovieMind WebEngine] loadStarted url={diagnostic_page.url().toString()}",
+                        flush=True,
+                    )
                 )
                 diagnostic_page.loadFinished.connect(
                     lambda ok: print(
@@ -421,6 +424,13 @@ class MovieMindQtPlayer(QMainWindow):
                 diagnostic_page.urlChanged.connect(
                     lambda url: print(
                         f"[MovieMind WebEngine] urlChanged {url.toString()}",
+                        flush=True,
+                    )
+                )
+                diagnostic_page.renderProcessTerminated.connect(
+                    lambda status, code: print(
+                        f"[MovieMind WebEngine] renderProcessTerminated "
+                        f"status={status} exitCode={code}",
                         flush=True,
                     )
                 )
