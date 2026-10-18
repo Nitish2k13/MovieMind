@@ -35,9 +35,10 @@ from PySide6.QtCore import Qt, QTimer, QObject, QEvent, Signal, QUrl
 from PySide6.QtGui import QAction, QKeySequence, QCursor, QDesktopServices
 try:
     from PySide6.QtWebEngineWidgets import QWebEngineView
-    from PySide6.QtWebEngineCore import QWebEngineScript, QWebEngineUrlRequestInterceptor
+    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineScript, QWebEngineUrlRequestInterceptor
 except ImportError:
     QWebEngineView = None
+    QWebEnginePage = None
     QWebEngineScript = None
     QWebEngineUrlRequestInterceptor = None
 
@@ -171,6 +172,20 @@ def _install_netmirror_compatibility(view) -> None:
 })();
 """)
     view.page().scripts().insert(script)
+
+
+if QWebEnginePage is not None:
+    class MovieMindDiagnosticWebPage(QWebEnginePage):
+        """Log embedded-site navigation and JavaScript errors for troubleshooting."""
+
+        def javaScriptConsoleMessage(self, level, message, line_number, source_id):
+            level_name = getattr(level, "name", str(level))
+            print(
+                f"[MovieMind WebEngine JS {level_name}] "
+                f"{source_id}:{line_number}: {message}",
+                flush=True,
+            )
+            super().javaScriptConsoleMessage(level, message, line_number, source_id)
 
 
 class AIResultBridge(QObject):
@@ -370,6 +385,35 @@ class MovieMindQtPlayer(QMainWindow):
             browser_toolbar.addWidget(self.browser_back_button)
             browser_layout.addLayout(browser_toolbar)
             self.browser_view = QWebEngineView(self.browser_panel)
+            if QWebEnginePage is not None:
+                diagnostic_page = MovieMindDiagnosticWebPage(
+                    self.browser_view.page().profile(), self.browser_view
+                )
+                self.browser_view.setPage(diagnostic_page)
+                diagnostic_page.loadStarted.connect(
+                    lambda: print("[MovieMind WebEngine] loadStarted", flush=True)
+                )
+                diagnostic_page.loadFinished.connect(
+                    lambda ok: print(
+                        f"[MovieMind WebEngine] loadFinished ok={ok} "
+                        f"url={diagnostic_page.url().toString()}",
+                        flush=True,
+                    )
+                )
+                diagnostic_page.urlChanged.connect(
+                    lambda url: print(
+                        f"[MovieMind WebEngine] urlChanged {url.toString()}",
+                        flush=True,
+                    )
+                )
+                if hasattr(diagnostic_page, "renderProcessTerminated"):
+                    diagnostic_page.renderProcessTerminated.connect(
+                        lambda status, code: print(
+                            f"[MovieMind WebEngine] renderProcessTerminated "
+                            f"status={status} exitCode={code}",
+                            flush=True,
+                        )
+                    )
             _install_netmirror_compatibility(self.browser_view)
             browser_layout.addWidget(self.browser_view, 1)
             self.browser_panel.setGeometry(self.video_surface.rect())
