@@ -178,6 +178,24 @@ if QWebEnginePage is not None:
     class MovieMindDiagnosticWebPage(QWebEnginePage):
         """Log embedded-site navigation and JavaScript errors for troubleshooting."""
 
+        def acceptNavigationRequest(self, url, navigation_type, is_main_frame):
+            nav_name = getattr(navigation_type, "name", str(navigation_type))
+            print(
+                f"[MovieMind WebEngine NAV] mainFrame={is_main_frame} "
+                f"type={nav_name} url={url.toString()}",
+                flush=True,
+            )
+            return super().acceptNavigationRequest(url, navigation_type, is_main_frame)
+
+        def createWindow(self, window_type):
+            window_name = getattr(window_type, "name", str(window_type))
+            print(
+                f"[MovieMind WebEngine POPUP] createWindow type={window_name} "
+                f"currentUrl={self.url().toString()}",
+                flush=True,
+            )
+            return super().createWindow(window_type)
+
         def javaScriptConsoleMessage(self, level, message, line_number, source_id):
             level_name = getattr(level, "name", str(level))
             print(
