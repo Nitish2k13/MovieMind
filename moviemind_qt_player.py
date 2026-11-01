@@ -151,28 +151,90 @@ def _install_netmirror_compatibility(view) -> None:
     });
   }
 
-  // Keep the existing cross-frame video candidate reporting behaviour.
+  // Collect only likely media resources. A player webpage (for example
+  // watchbox.php) is never promoted to a VLC candidate just because it loaded.
+  const seenMedia = new Set();
+  function looksLikeMediaUrl(raw, contentType) {
+    try {
+      const url = new URL(raw, location.href);
+      if (!/^https?:$/.test(url.protocol)) return false;
+      const path = url.pathname.toLowerCase();
+      const type = String(contentType || "").toLowerCase();
+      return /\\.(m3u8|mpd|mp4|m4v|mkv|webm|mov|avi|ts|m4s|mp3|m4a|aac|ogg|wav)$/.test(path) ||
+        /^(video\\/|audio\\/|application\\/(vnd\\.apple\\.mpegurl|x-mpegurl|dash\\+xml))/.test(type);
+    } catch (_) { return false; }
+  }
+  function reportMedia(raw, source, contentType) {
+    try {
+      if (!raw || !looksLikeMediaUrl(raw, contentType)) return;
+      const url = new URL(raw, location.href).href;
+      if (seenMedia.has(url)) return;
+      seenMedia.add(url);
+      const candidate = {
+        type: "MOVIEMIND_MEDIA_CANDIDATE",
+        url: url,
+        source: source || "resource",
+        contentType: contentType || "",
+        referer: location.href,
+        origin: location.origin,
+        userAgent: navigator.userAgent,
+        title: document.title || ""
+      };
+      // Forward from nested frames to the page's top frame, then to Python.
+      window.top.postMessage(candidate, "*");
+    } catch (_) {}
+  }
   function reportVideo() {
     try {
-      const videos = Array.from(document.querySelectorAll("video"));
-      for (const video of videos) {
+      for (const video of Array.from(document.querySelectorAll("video"))) {
         const source = video.querySelector("source");
-        const url = video.currentSrc || (source && source.src) || "";
-        if (!/^https?:/i.test(url)) continue;
-        const candidate = {
-          type: "MOVIEMIND_MEDIA_CANDIDATE",
-          url: url,
-          referer: location.href,
-          userAgent: navigator.userAgent,
-          title: document.title || ""
-        };
-        if (window === window.top) window.postMessage(candidate, "*");
-        else window.top.postMessage(candidate, "*");
+        const url = video.currentSrc || video.src || (source && source.src) || "";
+        reportMedia(url, "video-element", video.getAttribute("type") || "");
       }
     } catch (_) {}
   }
+  try {
+    const observer = new PerformanceObserver(list => {
+      for (const entry of list.getEntries()) {
+        reportMedia(entry.name, "performance-resource", "");
+      }
+    });
+    observer.observe({type: "resource", buffered: true});
+  } catch (_) {}
+  // Fetch/XHR are observed passively: response bodies and player behaviour are
+  // left untouched. Content-Type helps identify extensionless media endpoints.
+  try {
+    const originalFetch = window.fetch;
+    if (originalFetch && !originalFetch.__moviemindWrapped) {
+      const wrappedFetch = function() {
+        const result = originalFetch.apply(this, arguments);
+        result.then(response => {
+          try { reportMedia(response.url, "fetch", response.headers.get("content-type")); } catch (_) {}
+        }).catch(() => {});
+        return result;
+      };
+      wrappedFetch.__moviemindWrapped = true;
+      window.fetch = wrappedFetch;
+    }
+    const originalOpen = XMLHttpRequest.prototype.open;
+    if (!originalOpen.__moviemindWrapped) {
+      XMLHttpRequest.prototype.open = function(method, url) {
+        this.__moviemindUrl = new URL(url, location.href).href;
+        return originalOpen.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.addEventListener.call;
+      const originalSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send = function() {
+        this.addEventListener("load", function() {
+          try { reportMedia(this.responseURL || this.__moviemindUrl, "xhr", this.getResponseHeader("content-type")); } catch (_) {}
+        });
+        return originalSend.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.open.__moviemindWrapped = true;
+    }
+  } catch (_) {}
   reportVideo();
-  window.setInterval(reportVideo, 1200);
+  window.setInterval(reportVideo, 1000);
 })();
 """)
     view.page().scripts().insert(script)
@@ -1705,13 +1767,17 @@ Return only the answer, with no meta commentary.
         """Read media URLs reported by the active website frame, if any."""
         if not self.browser_view or not self.browser_panel or not self.browser_panel.isVisible():
             return
-        self.browser_view.page().runJavaScript(
+        active_view = self.browser_view
+        active_url = active_view.url().toString()
+        active_view.page().runJavaScript(
             "Array.isArray(window.__moviemindMediaCandidates) ? "
-            "window.__moviemindMediaCandidates.slice(-10) : []",
-            self._receive_embedded_media_candidates,
+            "window.__moviemindMediaCandidates.slice(-30) : []",
+            lambda candidates, page_url=active_url: self._receive_embedded_media_candidates(
+                candidates, page_url
+            ),
         )
 
-    def _receive_embedded_media_candidates(self, candidates) -> None:
+    def _receive_embedded_media_candidates(self, candidates, page_url="") -> None:
         if not isinstance(candidates, list):
             return
         usable = [
@@ -1719,20 +1785,56 @@ Return only the answer, with no meta commentary.
             if isinstance(item, dict)
             and isinstance(item.get("url"), str)
             and item["url"].startswith(("http://", "https://"))
-            and any(token in item["url"].lower() for token in
-                    (".mp4", ".m3u8", ".mpd", ".m4v", ".webm", ".ts", "hakunaymatata"))
+            and isinstance(item.get("contentType", ""), str)
+            and (
+                any(urlparse(item["url"]).path.lower().endswith(ext) for ext in
+                    (".mp4", ".m3u8", ".mpd", ".m4v", ".mkv", ".webm", ".mov",
+                     ".avi", ".ts", ".m4s", ".mp3", ".m4a", ".aac", ".ogg", ".wav"))
+                or item.get("contentType", "").lower().startswith(("video/", "audio/"))
+                or "mpegurl" in item.get("contentType", "").lower()
+                or "dash+xml" in item.get("contentType", "").lower()
+            )
         ]
         if usable:
-            self._latest_browser_media_candidate = usable[-1]
+            candidate = usable[-1]
+            previous = self._latest_browser_media_candidate
+            if not previous or previous.get("url") != candidate.get("url"):
+                parsed = urlparse(candidate["url"])
+                print(
+                    "[MovieMind Media] candidate detected "
+                    f"host={parsed.hostname or ''} path={parsed.path} "
+                    f"source={candidate.get('source', 'unknown')} "
+                    f"contentType={candidate.get('contentType', '')} "
+                    f"frameRefererHost={urlparse(candidate.get('referer', '')).hostname or ''}",
+                    flush=True,
+                )
+            self._latest_browser_media_candidate = candidate
             if hasattr(self, "browser_play_detected_button"):
                 self.browser_play_detected_button.setEnabled(True)
                 self.browser_play_detected_button.setToolTip(
-                    "A video URL was detected. Click to play it with MovieMind's VLC player."
+                    "A direct media resource was detected. Click to play it with MovieMind's VLC player."
                 )
 
     def _play_detected_browser_media(self) -> None:
         """Hand the selected website media URL to VLC, preserving useful HTTP headers."""
         candidate = self._latest_browser_media_candidate
+        print(
+            "[MovieMind Media] Play detected video clicked "
+            f"activePage={self.browser_view.url().toString() if self.browser_view else ''} "
+            f"candidate={'present' if candidate else 'none'}",
+            flush=True,
+        )
+        if candidate:
+            parsed = urlparse(candidate.get("url", ""))
+            print(
+                "[MovieMind Media] handoff candidate "
+                f"host={parsed.hostname or ''} path={parsed.path} "
+                f"source={candidate.get('source', 'unknown')} "
+                f"contentType={candidate.get('contentType', '')} "
+                f"refererHost={urlparse(candidate.get('referer', '')).hostname or ''} "
+                f"userAgentPresent={bool(candidate.get('userAgent'))}",
+                flush=True,
+            )
         if not candidate:
             self._poll_embedded_media_candidates()
             self._set_status("WAITING FOR WEBSITE VIDEO — SELECT A SERVER FIRST")
@@ -2002,6 +2104,11 @@ Return only the answer, with no meta commentary.
                 media.add_option(":http-referrer=" + http_referer)
             if http_user_agent:
                 media.add_option(":http-user-agent=" + http_user_agent)
+            if http_referer:
+                # Also send the origin where supported by the remote media host.
+                origin = urlparse(http_referer)
+                if origin.scheme and origin.netloc:
+                    media.add_option(":http-origin=" + f"{origin.scheme}://{origin.netloc}")
             if audio_source:
                 # VLC supports secondary input streams through the input-slave media option.
                 media.add_option(":input-slave=" + audio_source)
