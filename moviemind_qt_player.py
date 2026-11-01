@@ -161,7 +161,7 @@ def _install_netmirror_compatibility(view) -> None:
       const path = url.pathname.toLowerCase();
       const type = String(contentType || "").toLowerCase();
       return /\.(m3u8|mpd|mp4|m4v|mkv|webm|mov|avi|ts|m4s|mp3|m4a|aac|ogg|wav)$/.test(path) ||
-        /^(video\/|audio\/|application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\\+xml))/.test(type);
+        /^(video\/|audio\/|application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+xml))/.test(type);
     } catch (_) { return false; }
   }
   function reportMedia(raw, source, contentType) {
