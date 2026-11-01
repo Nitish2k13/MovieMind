@@ -101,17 +101,20 @@ if QWebEngineUrlRequestInterceptor is not None:
 
 
 def _install_netmirror_compatibility(view) -> None:
-    """Install the extension's header rule and its documented page-detection handshake."""
-    if QWebEngineScript is None or QWebEngineUrlRequestInterceptor is None:
+    """Mirror the supplied extension's all-URL handshake and narrow Referer rule."""
+    if QWebEngineScript is None:
         return
-    profile = view.page().profile()
-    interceptor = NetmirrorRequestInterceptor(profile)
-    profile.setUrlRequestInterceptor(interceptor)
-    # Keep a Python reference for the lifetime of the profile.
-    view._netmirror_request_interceptor = interceptor
 
-    # The extension's content.js responds to this message so the site can detect it.
-    # Limit the compatibility shim to NetMirror pages rather than all websites.
+    profile = view.page().profile()
+    if QWebEngineUrlRequestInterceptor is not None:
+        interceptor = NetmirrorRequestInterceptor(profile)
+        profile.setUrlRequestInterceptor(interceptor)
+        # Keep a Python reference for the lifetime of the profile.
+        view._netmirror_request_interceptor = interceptor
+
+    # The original extension manifest uses matches: <all_urls> and run_at:
+    # document_start. Its content.js listens for NETMIRROR_CHECK in every frame,
+    # regardless of hostname, then posts NETMIRROR_EXTENSION_DETECTED back.
     script = QWebEngineScript()
     script.setName("MovieMind NetMirror compatibility")
     script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
@@ -119,6 +122,19 @@ def _install_netmirror_compatibility(view) -> None:
     script.setRunsOnSubFrames(True)
     script.setSourceCode("""
 (function () {
+  // Match the original extension's content.js handshake on every page/frame.
+  window.addEventListener("message", function (event) {
+    if (event.source !== window) return;
+    if (event.data && event.data.type === "NETMIRROR_CHECK") {
+      window.postMessage({
+        type: "NETMIRROR_EXTENSION_DETECTED",
+        installed: true
+      }, "*");
+    }
+  });
+
+  // MovieMind's separate media-candidate bridge; this does not replace the
+  // extension handshake and is retained for the existing VLC handoff feature.
   if (!window.__moviemindMediaBridgeInstalled) {
     window.__moviemindMediaBridgeInstalled = true;
     window.__moviemindMediaCandidates = window.__moviemindMediaCandidates || [];
@@ -134,20 +150,8 @@ def _install_netmirror_compatibility(view) -> None:
       }
     });
   }
-  if (/\\bnetmirror\\./i.test(location.hostname)) {
-    window.addEventListener("message", function (event) {
-      if (event.source === window && event.data &&
-          event.data.type === "NETMIRROR_CHECK") {
-        window.postMessage({
-          type: "NETMIRROR_EXTENSION_DETECTED",
-          installed: true
-        }, "*");
-      }
-    });
-  }
-  // The website may place its player in a cross-origin iframe. Each injected
-  // frame reports only its current media URL to the top frame; it does not
-  // inspect cookies, local storage, or unrelated request headers.
+
+  // Keep the existing cross-frame video candidate reporting behaviour.
   function reportVideo() {
     try {
       const videos = Array.from(document.querySelectorAll("video"));
