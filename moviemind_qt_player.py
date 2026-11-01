@@ -222,7 +222,6 @@ def _install_netmirror_compatibility(view) -> None:
         this.__moviemindUrl = new URL(url, location.href).href;
         return originalOpen.apply(this, arguments);
       };
-      XMLHttpRequest.prototype.addEventListener.call;
       const originalSend = XMLHttpRequest.prototype.send;
       XMLHttpRequest.prototype.send = function() {
         this.addEventListener("load", function() {
