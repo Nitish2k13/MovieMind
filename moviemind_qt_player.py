@@ -1839,6 +1839,13 @@ Return only the answer, with no meta commentary.
             return
         active_view = self.browser_view
         active_url = active_view.url().toString()
+        active_host = (urlparse(active_url).hostname or "").lower()
+        if active_host == "hotstar.com" or active_host.endswith(".hotstar.com") or active_host == "jiohotstar.com" or active_host.endswith(".jiohotstar.com"):
+            # Never offer a VLC handoff for Hotstar's protected player or DRM media.
+            self._latest_browser_media_candidate = None
+            if self.browser_play_detected_button is not None:
+                self.browser_play_detected_button.setEnabled(False)
+            return
         active_view.page().runJavaScript(
             "Array.isArray(window.__moviemindMediaCandidates) ? "
             "window.__moviemindMediaCandidates.slice(-30) : []",
