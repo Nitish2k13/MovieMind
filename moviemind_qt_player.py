@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QMenu, QMessageBox, QPushButton, QSizePolicy, QSlider, QVBoxLayout,
     QWidget, QFrame, QComboBox, QLineEdit, QTextEdit, QTextBrowser, QScrollArea,
-    QInputDialog,
+    QInputDialog, QStackedWidget,
 )
 
 try:
@@ -176,7 +176,11 @@ def _install_netmirror_compatibility(view) -> None:
 
 if QWebEnginePage is not None:
     class MovieMindDiagnosticWebPage(QWebEnginePage):
-        """Log embedded-site navigation and JavaScript errors for troubleshooting."""
+        """Log embedded-site navigation and route popup windows into MovieMind."""
+
+        def __init__(self, profile, parent=None, popup_owner=None):
+            super().__init__(profile, parent)
+            self._popup_owner = popup_owner
 
         def acceptNavigationRequest(self, url, navigation_type, is_main_frame):
             nav_name = getattr(navigation_type, "name", str(navigation_type))
@@ -194,6 +198,8 @@ if QWebEnginePage is not None:
                 f"currentUrl={self.url().toString()}",
                 flush=True,
             )
+            if self._popup_owner is not None:
+                return self._popup_owner._create_embedded_popup(window_type)
             return super().createWindow(window_type)
 
         def javaScriptConsoleMessage(self, level, message, line_number, source_id):
@@ -376,6 +382,10 @@ class MovieMindQtPlayer(QMainWindow):
         self.video_surface.setStyleSheet("background:#02060c; border:1px solid #1b3552; border-radius:14px;")
         self.browser_panel = None
         self.browser_view = None
+        self._browser_main_view = None
+        self._browser_stack = None
+        self._browser_popup_views = []
+        self.browser_close_popup_button = None
         self._latest_browser_media_candidate = None
         self._browser_media_poll = QTimer(self)
         self._browser_media_poll.setInterval(1500)
@@ -398,14 +408,20 @@ class MovieMindQtPlayer(QMainWindow):
             self.browser_play_detected_button.clicked.connect(self._play_detected_browser_media)
             browser_toolbar.addWidget(self.browser_play_detected_button)
             browser_toolbar.addStretch()
+            self.browser_close_popup_button = QPushButton("✕ Close popup / Return")
+            self.browser_close_popup_button.clicked.connect(self._close_embedded_popup)
+            self.browser_close_popup_button.hide()
+            browser_toolbar.addWidget(self.browser_close_popup_button)
             self.browser_back_button = QPushButton("← Back to MovieMind player")
             self.browser_back_button.clicked.connect(self._close_embedded_browser)
             browser_toolbar.addWidget(self.browser_back_button)
             browser_layout.addLayout(browser_toolbar)
-            self.browser_view = QWebEngineView(self.browser_panel)
+            self.browser_stack = QStackedWidget(self.browser_panel)
+            self.browser_view = QWebEngineView(self.browser_stack)
+            self._browser_main_view = self.browser_view
             if QWebEnginePage is not None:
                 diagnostic_page = MovieMindDiagnosticWebPage(
-                    self.browser_view.page().profile(), self.browser_view
+                    self.browser_view.page().profile(), self.browser_view, self
                 )
                 self.browser_view.setPage(diagnostic_page)
                 diagnostic_page.loadStarted.connect(
@@ -443,7 +459,8 @@ class MovieMindQtPlayer(QMainWindow):
                         )
                     )
             _install_netmirror_compatibility(self.browser_view)
-            browser_layout.addWidget(self.browser_view, 1)
+            self.browser_stack.addWidget(self.browser_view)
+            browser_layout.addWidget(self.browser_stack, 1)
             self.browser_panel.setGeometry(self.video_surface.rect())
             self.browser_panel.hide()
         left.addWidget(self.video_surface, 1)
@@ -1734,6 +1751,53 @@ Return only the answer, with no meta commentary.
             display_title=title, http_referer=referer, http_user_agent=user_agent,
         )
 
+    def _create_embedded_popup(self, window_type):
+        """Create a visible in-app page for a site's target=_blank/window.open request."""
+        if self._browser_stack is None or self.browser_view is None or QWebEnginePage is None:
+            return None
+        popup_view = QWebEngineView(self._browser_stack)
+        popup_page = MovieMindDiagnosticWebPage(
+            self._browser_main_view.page().profile(), popup_view, self
+        )
+        popup_view.setPage(popup_page)
+        _install_netmirror_compatibility(popup_view)
+        self._browser_popup_views.append(popup_view)
+        self._browser_stack.addWidget(popup_view)
+        self._browser_stack.setCurrentWidget(popup_view)
+        self.browser_view = popup_view
+        if self.browser_close_popup_button is not None:
+            self.browser_close_popup_button.show()
+        print(
+            f"[MovieMind WebEngine POPUP] opened in-app view type={window_type}",
+            flush=True,
+        )
+        return popup_page
+
+    def _close_embedded_popup(self) -> None:
+        """Close only the current popup and restore the previous embedded page."""
+        if not self._browser_popup_views or self._browser_stack is None:
+            return
+        popup_view = self._browser_popup_views.pop()
+        self._browser_stack.removeWidget(popup_view)
+        popup_view.deleteLater()
+        self.browser_view = (
+            self._browser_popup_views[-1]
+            if self._browser_popup_views else self._browser_main_view
+        )
+        if self.browser_view is not None:
+            self._browser_stack.setCurrentWidget(self.browser_view)
+        if self.browser_close_popup_button is not None:
+            self.browser_close_popup_button.setVisible(bool(self._browser_popup_views))
+        print(
+            f"[MovieMind WebEngine POPUP] returned to "
+            f"{self.browser_view.url().toString() if self.browser_view else ''}",
+            flush=True,
+        )
+
+    def _close_all_embedded_popups(self) -> None:
+        while self._browser_popup_views:
+            self._close_embedded_popup()
+
     def _close_embedded_browser(self) -> None:
         """Hide the website overlay and return to MovieMind's VLC video surface."""
         if self.browser_panel is not None:
@@ -1744,6 +1808,8 @@ Return only the answer, with no meta commentary.
         """Load a webpage inside MovieMind when Qt WebEngine is available."""
         if self.browser_view is not None and self.browser_panel is not None:
             try:
+                self._close_all_embedded_popups()
+                self.browser_view = self._browser_main_view
                 self.browser_panel.setGeometry(self.video_surface.rect())
                 self.browser_panel.show()
                 self.browser_panel.raise_()
