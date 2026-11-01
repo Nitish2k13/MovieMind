@@ -31,16 +31,17 @@ try:
 except ImportError:
     pytesseract = None
 
-from PySide6.QtCore import Qt, QTimer, QObject, QEvent, Signal, QUrl
+from PySide6.QtCore import Qt, QTimer, QObject, QEvent, Signal, QUrl, QStandardPaths
 from PySide6.QtGui import QAction, QKeySequence, QCursor, QDesktopServices
 try:
     from PySide6.QtWebEngineWidgets import QWebEngineView
-    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineScript, QWebEngineUrlRequestInterceptor
+    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineScript, QWebEngineUrlRequestInterceptor, QWebEngineProfile
 except ImportError:
     QWebEngineView = None
     QWebEnginePage = None
     QWebEngineScript = None
     QWebEngineUrlRequestInterceptor = None
+    QWebEngineProfile = None
 
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -472,6 +473,19 @@ class MovieMindQtPlayer(QMainWindow):
             self.browser_play_detected_button.setEnabled(False)
             self.browser_play_detected_button.clicked.connect(self._play_detected_browser_media)
             browser_toolbar.addWidget(self.browser_play_detected_button)
+            self.hotstar_url_input = QLineEdit()
+            self.hotstar_url_input.setPlaceholderText("Paste a JioHotstar movie / episode URL")
+            self.hotstar_url_input.setMinimumWidth(220)
+            self.hotstar_url_input.returnPressed.connect(self.open_hotstar_url)
+            browser_toolbar.addWidget(self.hotstar_url_input, 1)
+            self.hotstar_open_button = QPushButton("Open Hotstar")
+            self.hotstar_open_button.setObjectName("primary")
+            self.hotstar_open_button.clicked.connect(self.open_hotstar_url)
+            browser_toolbar.addWidget(self.hotstar_open_button)
+            self.hotstar_external_button = QPushButton("Open in browser")
+            self.hotstar_external_button.setToolTip("Open the same Hotstar page in your default Chrome / Edge browser")
+            self.hotstar_external_button.clicked.connect(self.open_hotstar_external)
+            browser_toolbar.addWidget(self.hotstar_external_button)
             browser_toolbar.addStretch()
             self.browser_close_popup_button = QPushButton("✕ Close popup / Return")
             self.browser_close_popup_button.clicked.connect(self._close_embedded_popup)
@@ -485,9 +499,20 @@ class MovieMindQtPlayer(QMainWindow):
             self._browser_stack = self.browser_stack
             self.browser_view = QWebEngineView(self.browser_stack)
             self._browser_main_view = self.browser_view
+            self._hotstar_profile = None
+            if QWebEngineProfile is not None and QWebEnginePage is not None:
+                profile_root = Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)) / "hotstar-browser"
+                profile_root.mkdir(parents=True, exist_ok=True)
+                self._hotstar_profile = QWebEngineProfile("MovieMindHotstar", self)
+                self._hotstar_profile.setPersistentStoragePath(str(profile_root / "storage"))
+                self._hotstar_profile.setCachePath(str(profile_root / "cache"))
+                self._hotstar_profile.setPersistentCookiesPolicy(
+                    QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies
+                )
             if QWebEnginePage is not None:
+                active_profile = self._hotstar_profile or self.browser_view.page().profile()
                 diagnostic_page = MovieMindDiagnosticWebPage(
-                    self.browser_view.page().profile(), self.browser_view, self
+                    active_profile, self.browser_view, self
                 )
                 self.browser_view.setPage(diagnostic_page)
                 diagnostic_page.loadStarted.connect(
@@ -1762,6 +1787,51 @@ Return only the answer, with no meta commentary.
             self._play_media_source(url, is_url=True)
         else:
             self._play_webpage_url(url)
+
+    def open_hotstar_url(self) -> None:
+        """Open a user-supplied JioHotstar page in MovieMind's persistent browser profile."""
+        if self.hotstar_url_input is None:
+            return
+        url = self.hotstar_url_input.text().strip()
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        allowed_host = host == "hotstar.com" or host.endswith(".hotstar.com") or host == "jiohotstar.com" or host.endswith(".jiohotstar.com")
+        if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc or not allowed_host:
+            QMessageBox.warning(
+                self, "Invalid Hotstar URL",
+                "Paste a valid JioHotstar URL from hotstar.com or jiohotstar.com."
+            )
+            return
+        self._close_all_embedded_popups()
+        self.browser_view = self._browser_main_view
+        self.browser_panel.setGeometry(self.video_surface.rect())
+        self.browser_panel.show()
+        self.browser_panel.raise_()
+        self.browser_view.setUrl(QUrl(url))
+        self.answer_area.setPlainText(
+            "Opening JioHotstar inside MovieMind. Sign in with your own subscription if prompted.\n\n"
+            "MovieMind keeps this browser profile on this computer so your session can persist. "
+            "Hotstar may still ask you to sign in again if its session expires.\n\n"
+            "If playback does not work in the embedded browser, use 'Open in browser' to open the same page "
+            "in your default Chrome / Edge browser. Protected playback remains inside Hotstar's own player."
+        )
+        self._set_status("OPENING JIOHOTSTAR")
+
+    def open_hotstar_external(self) -> None:
+        """Open the entered/current Hotstar page in the system's default browser."""
+        url = self.hotstar_url_input.text().strip() if self.hotstar_url_input is not None else ""
+        if not url and self.browser_view is not None:
+            url = self.browser_view.url().toString()
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        allowed_host = host == "hotstar.com" or host.endswith(".hotstar.com") or host == "jiohotstar.com" or host.endswith(".jiohotstar.com")
+        if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc or not allowed_host:
+            QMessageBox.information(self, "Open Hotstar", "Paste a valid JioHotstar URL first.")
+            return
+        if QDesktopServices.openUrl(QUrl(url)):
+            self._set_status("OPENED HOTSTAR IN DEFAULT BROWSER")
+        else:
+            QMessageBox.warning(self, "Browser launch failed", "MovieMind could not open the system browser.")
 
     def _poll_embedded_media_candidates(self) -> None:
         """Read media URLs reported by the active website frame, if any."""
