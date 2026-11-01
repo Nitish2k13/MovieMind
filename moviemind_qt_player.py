@@ -482,6 +482,7 @@ class MovieMindQtPlayer(QMainWindow):
             browser_toolbar.addWidget(self.browser_back_button)
             browser_layout.addLayout(browser_toolbar)
             self.browser_stack = QStackedWidget(self.browser_panel)
+            self._browser_stack = self.browser_stack
             self.browser_view = QWebEngineView(self.browser_stack)
             self._browser_main_view = self.browser_view
             if QWebEnginePage is not None:
