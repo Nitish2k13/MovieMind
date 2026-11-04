@@ -1,4 +1,4 @@
-"""MovieMind's PySide6 player UI with the existing offline AI companion.
+"""CineVerse's PySide6 player UI with the existing offline AI companion.
 
 The legacy Tkinter implementation remains unchanged; its Easter-egg research
 logic is integrated into this Qt prototype.
@@ -117,7 +117,7 @@ def _install_netmirror_compatibility(view) -> None:
     # document_start. Its content.js listens for NETMIRROR_CHECK in every frame,
     # regardless of hostname, then posts NETMIRROR_EXTENSION_DETECTED back.
     script = QWebEngineScript()
-    script.setName("MovieMind NetMirror compatibility")
+    script.setName("CineVerse NetMirror compatibility")
     script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
     script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
     script.setRunsOnSubFrames(True)
@@ -134,7 +134,7 @@ def _install_netmirror_compatibility(view) -> None:
     }
   });
 
-  // MovieMind's separate media-candidate bridge; this does not replace the
+  // CineVerse's separate media-candidate bridge; this does not replace the
   // extension handshake and is retained for the existing VLC handoff feature.
   if (!window.__moviemindMediaBridgeInstalled) {
     window.__moviemindMediaBridgeInstalled = true;
@@ -241,8 +241,8 @@ def _install_netmirror_compatibility(view) -> None:
 
 
 if QWebEnginePage is not None:
-    class MovieMindDiagnosticWebPage(QWebEnginePage):
-        """Log embedded-site navigation and route popup windows into MovieMind."""
+    class CineVerseDiagnosticWebPage(QWebEnginePage):
+        """Log embedded-site navigation and route popup windows into CineVerse."""
 
         def __init__(self, profile, parent=None, popup_owner=None):
             super().__init__(profile, parent)
@@ -251,7 +251,7 @@ if QWebEnginePage is not None:
         def acceptNavigationRequest(self, url, navigation_type, is_main_frame):
             nav_name = getattr(navigation_type, "name", str(navigation_type))
             print(
-                f"[MovieMind WebEngine NAV] mainFrame={is_main_frame} "
+                f"[CineVerse WebEngine NAV] mainFrame={is_main_frame} "
                 f"type={nav_name} url={url.toString()}",
                 flush=True,
             )
@@ -260,7 +260,7 @@ if QWebEnginePage is not None:
         def createWindow(self, window_type):
             window_name = getattr(window_type, "name", str(window_type))
             print(
-                f"[MovieMind WebEngine POPUP] createWindow type={window_name} "
+                f"[CineVerse WebEngine POPUP] createWindow type={window_name} "
                 f"currentUrl={self.url().toString()}",
                 flush=True,
             )
@@ -271,7 +271,7 @@ if QWebEnginePage is not None:
         def javaScriptConsoleMessage(self, level, message, line_number, source_id):
             level_name = getattr(level, "name", str(level))
             print(
-                f"[MovieMind WebEngine JS {level_name}] "
+                f"[CineVerse WebEngine JS {level_name}] "
                 f"{source_id}:{line_number}: {message}",
                 flush=True,
             )
@@ -296,10 +296,10 @@ def clock(ms: int) -> str:
     return f"{hours}:{minutes:02}:{seconds:02}" if hours else f"{minutes:02}:{seconds:02}"
 
 
-class MovieMindQtPlayer(QMainWindow):
+class CineVerseQtPlayer(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("MovieMind")
+        self.setWindowTitle("CineVerse")
         self.resize(1440, 900)
         self.setMinimumSize(980, 640)
         self.setStyleSheet(STYLESHEET)
@@ -423,7 +423,7 @@ class MovieMindQtPlayer(QMainWindow):
         header.setObjectName("topbar")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 15)
-        brand = QLabel("◈  MovieMind")
+        brand = QLabel("◈  CineVerse")
         brand.setObjectName("brand")
         header_layout.addWidget(brand)
         header_layout.addStretch()
@@ -458,7 +458,7 @@ class MovieMindQtPlayer(QMainWindow):
         self._browser_media_poll.timeout.connect(self._poll_embedded_media_candidates)
         self._browser_media_poll.start()
         if QWebEngineView is not None:
-            # Keep website playback inside MovieMind; hide this overlay again for VLC media.
+            # Keep website playback inside CineVerse; hide this overlay again for VLC media.
             self.browser_panel = QWidget(self.video_surface)
             self.browser_panel.setObjectName("embeddedBrowserPanel")
             browser_layout = QVBoxLayout(self.browser_panel)
@@ -466,7 +466,7 @@ class MovieMindQtPlayer(QMainWindow):
             browser_layout.setSpacing(0)
             browser_toolbar = QHBoxLayout()
             browser_toolbar.setContentsMargins(8, 6, 8, 6)
-            self.browser_play_detected_button = QPushButton("▶ Play detected video in MovieMind")
+            self.browser_play_detected_button = QPushButton("▶ Play detected video in CineVerse")
             self.browser_play_detected_button.setToolTip(
                 "Select a server on the website; this button becomes available when a video URL is detected"
             )
@@ -491,7 +491,7 @@ class MovieMindQtPlayer(QMainWindow):
             self.browser_close_popup_button.clicked.connect(self._close_embedded_popup)
             self.browser_close_popup_button.hide()
             browser_toolbar.addWidget(self.browser_close_popup_button)
-            self.browser_back_button = QPushButton("← Back to MovieMind player")
+            self.browser_back_button = QPushButton("← Back to CineVerse player")
             self.browser_back_button.clicked.connect(self._close_embedded_browser)
             browser_toolbar.addWidget(self.browser_back_button)
             browser_layout.addLayout(browser_toolbar)
@@ -503,7 +503,7 @@ class MovieMindQtPlayer(QMainWindow):
             if QWebEngineProfile is not None and QWebEnginePage is not None:
                 profile_root = Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)) / "hotstar-browser"
                 profile_root.mkdir(parents=True, exist_ok=True)
-                self._hotstar_profile = QWebEngineProfile("MovieMindHotstar", self)
+                self._hotstar_profile = QWebEngineProfile("CineVerseHotstar", self)
                 self._hotstar_profile.setPersistentStoragePath(str(profile_root / "storage"))
                 self._hotstar_profile.setCachePath(str(profile_root / "cache"))
                 self._hotstar_profile.setPersistentCookiesPolicy(
@@ -511,32 +511,32 @@ class MovieMindQtPlayer(QMainWindow):
                 )
             if QWebEnginePage is not None:
                 active_profile = self._hotstar_profile or self.browser_view.page().profile()
-                diagnostic_page = MovieMindDiagnosticWebPage(
+                diagnostic_page = CineVerseDiagnosticWebPage(
                     active_profile, self.browser_view, self
                 )
                 self.browser_view.setPage(diagnostic_page)
                 diagnostic_page.loadStarted.connect(
                     lambda: print(
-                        f"[MovieMind WebEngine] loadStarted url={diagnostic_page.url().toString()}",
+                        f"[CineVerse WebEngine] loadStarted url={diagnostic_page.url().toString()}",
                         flush=True,
                     )
                 )
                 diagnostic_page.loadFinished.connect(
                     lambda ok: print(
-                        f"[MovieMind WebEngine] loadFinished ok={ok} "
+                        f"[CineVerse WebEngine] loadFinished ok={ok} "
                         f"url={diagnostic_page.url().toString()}",
                         flush=True,
                     )
                 )
                 diagnostic_page.urlChanged.connect(
                     lambda url: print(
-                        f"[MovieMind WebEngine] urlChanged {url.toString()}",
+                        f"[CineVerse WebEngine] urlChanged {url.toString()}",
                         flush=True,
                     )
                 )
                 diagnostic_page.renderProcessTerminated.connect(
                     lambda status, code: print(
-                        f"[MovieMind WebEngine] renderProcessTerminated "
+                        f"[CineVerse WebEngine] renderProcessTerminated "
                         f"status={status} exitCode={code}",
                         flush=True,
                     )
@@ -544,7 +544,7 @@ class MovieMindQtPlayer(QMainWindow):
                 if hasattr(diagnostic_page, "renderProcessTerminated"):
                     diagnostic_page.renderProcessTerminated.connect(
                         lambda status, code: print(
-                            f"[MovieMind WebEngine] renderProcessTerminated "
+                            f"[CineVerse WebEngine] renderProcessTerminated "
                             f"status={status} exitCode={code}",
                             flush=True,
                         )
@@ -702,7 +702,7 @@ class MovieMindQtPlayer(QMainWindow):
         side.addWidget(title)
         desc = QLabel(
             "Understand scenes, decode dialogue, and discover details without losing the moment. "
-            "MovieMind can make mistakes; watching from the beginning can provide better context "
+            "CineVerse can make mistakes; watching from the beginning can provide better context "
             "for more accurate responses."
         )
         desc.setObjectName("muted")
@@ -781,7 +781,7 @@ class MovieMindQtPlayer(QMainWindow):
         self.ai_input.hide()
         side.addWidget(self.ai_input)
 
-        self.ai_submit = QPushButton("Ask MovieMind")
+        self.ai_submit = QPushButton("Ask CineVerse")
         self.ai_submit.setObjectName("primary")
         self.ai_submit.clicked.connect(self._submit_ai_input)
         self.ai_submit.hide()
@@ -816,7 +816,7 @@ class MovieMindQtPlayer(QMainWindow):
             self.ai_input.clear()
         if mode == "Ask a question":
             self.ai_input.setPlaceholderText("Ask a question about this movie…")
-            self.ai_submit.setText("Ask MovieMind")
+            self.ai_submit.setText("Ask CineVerse")
             self.ai_input.setFocus()
         elif mode == "Explain a word":
             self.ai_input.setPlaceholderText("Enter a word or phrase…")
@@ -986,7 +986,7 @@ class MovieMindQtPlayer(QMainWindow):
         self.ai_submit.setVisible(needs_input)
         if mode == "Ask a question":
             self.ai_input.setPlaceholderText("Ask a question about this movie…")
-            self.ai_submit.setText("Ask MovieMind")
+            self.ai_submit.setText("Ask CineVerse")
             self.answer_area.setPlaceholderText("Ask about the movie. Normal questions run locally.")
         elif mode == "Explain a word":
             self.ai_input.setPlaceholderText("Enter a word or phrase…")
@@ -1042,7 +1042,7 @@ class MovieMindQtPlayer(QMainWindow):
         self._language_refresh_pending = True
         self.answer_area.setPlainText(
             f"Switching response language to {language}…\n"
-            "MovieMind will refresh the current answer locally. The fan may briefly speed up while the AI works; this is normal. "
+            "CineVerse will refresh the current answer locally. The fan may briefly speed up while the AI works; this is normal. "
             "If you switch languages several times, only the last selection will be processed."
         )
         self._set_status(f"LANGUAGE SWITCHED · REFRESHING IN {language.upper()}")
@@ -1268,9 +1268,9 @@ class MovieMindQtPlayer(QMainWindow):
                 return
         memory = "\n".join(
             f"[{item['time']}] User asked ({item['mode']}): {item['question']}\n"
-            f"MovieMind answered: {item['answer'][:700]}"
+            f"CineVerse answered: {item['answer'][:700]}"
             for item in self.recent_qa_memory[-5:]
-        ) or "No earlier MovieMind conversation in this session."
+        ) or "No earlier CineVerse conversation in this session."
         if mode == "Movie overview":
             try:
                 media_length_ms = self.player.get_length() if self.player else -1
@@ -1356,7 +1356,7 @@ class MovieMindQtPlayer(QMainWindow):
 
         language = self.reply_language
         language_instruction = self._language_instruction(language)
-        prompt = f"""You are MovieMind, a local movie companion running on the user's computer.
+        prompt = f"""You are CineVerse, a local movie companion running on the user's computer.
 MANDATORY RESPONSE LANGUAGE: {language}
 {language_instruction}
 The response must be entirely in the selected response language, except movie titles, names, and unavoidable technical terms. This rule applies to every mode, including Movie overview, Explain scene, Explain dialogue, Explain a word, and Ask a question. Do not default to English when Tamil or Tanglish is selected.
@@ -1439,7 +1439,7 @@ Return only the answer, with no meta commentary.
             # Easter egg research requires internet; normal AI modes remain local/offline.
             connectivity_check = urllib.request.Request(
                 "https://www.google.com/generate_204",
-                headers={"User-Agent": "MovieMind/1.0"},
+                headers={"User-Agent": "CineVerse/1.0"},
             )
             try:
                 with urllib.request.urlopen(connectivity_check, timeout=4):
@@ -1542,7 +1542,7 @@ Return only the answer, with no meta commentary.
                 for search_phrase in search_phrases:
                     search_url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(search_phrase)
                     search_req = urllib.request.Request(
-                        search_url, headers={"User-Agent": "Mozilla/5.0 (compatible; MovieMind/1.0)"},
+                        search_url, headers={"User-Agent": "Mozilla/5.0 (compatible; CineVerse/1.0)"},
                     )
                     try:
                         with urllib.request.urlopen(search_req, timeout=10) as response:
@@ -1580,7 +1580,7 @@ Return only the answer, with no meta commentary.
                         )
             web_evidence = "\n\n".join(snippets) or "No usable web results were returned by the search provider."
             synthesis_prompt = (
-                f"You are MovieMind's careful Easter-egg researcher. Reply in {language}. Movie: {movie_title}.\n"
+                f"You are CineVerse's careful Easter-egg researcher. Reply in {language}. Movie: {movie_title}.\n"
                 f"VISIBLE CLUE CANDIDATES (the vision model can be wrong):\n{clues}\n\n"
                 f"WEB SEARCH RESULTS (unverified snippets):\n{web_evidence}\n\n"
                 "Return at most 3 findings in plain text, without Markdown bold markers (**), using this format: "
@@ -1665,7 +1665,7 @@ Return only the answer, with no meta commentary.
             result = data.get("response", "").strip() or "The local model returned an empty answer."
         except urllib.error.URLError as exc:
             error = (
-                "MovieMind's local AI is unavailable. Start Ollama and check 'ollama list'. "
+                "CineVerse's local AI is unavailable. Start Ollama and check 'ollama list'. "
                 "The required model is gemma3:4b. Details: " + str(exc)
             )
         except Exception as exc:
@@ -1789,7 +1789,7 @@ Return only the answer, with no meta commentary.
             self._play_webpage_url(url)
 
     def open_hotstar_url(self) -> None:
-        """Open a user-supplied JioHotstar page in MovieMind's persistent browser profile."""
+        """Open a user-supplied JioHotstar page in CineVerse's persistent browser profile."""
         if self.hotstar_url_input is None:
             return
         url = self.hotstar_url_input.text().strip()
@@ -1809,8 +1809,8 @@ Return only the answer, with no meta commentary.
         self.browser_panel.raise_()
         self.browser_view.setUrl(QUrl(url))
         self.answer_area.setPlainText(
-            "Opening JioHotstar inside MovieMind. Sign in with your own subscription if prompted.\n\n"
-            "MovieMind keeps this browser profile on this computer so your session can persist. "
+            "Opening JioHotstar inside CineVerse. Sign in with your own subscription if prompted.\n\n"
+            "CineVerse keeps this browser profile on this computer so your session can persist. "
             "Hotstar may still ask you to sign in again if its session expires.\n\n"
             "If playback does not work in the embedded browser, use 'Open in browser' to open the same page "
             "in your default Chrome / Edge browser. Protected playback remains inside Hotstar's own player."
@@ -1831,7 +1831,7 @@ Return only the answer, with no meta commentary.
         if QDesktopServices.openUrl(QUrl(url)):
             self._set_status("OPENED HOTSTAR IN DEFAULT BROWSER")
         else:
-            QMessageBox.warning(self, "Browser launch failed", "MovieMind could not open the system browser.")
+            QMessageBox.warning(self, "Browser launch failed", "CineVerse could not open the system browser.")
 
     def _poll_embedded_media_candidates(self) -> None:
         """Read media URLs reported by the active website frame, if any."""
@@ -1878,7 +1878,7 @@ Return only the answer, with no meta commentary.
             if not previous or previous.get("url") != candidate.get("url"):
                 parsed = urlparse(candidate["url"])
                 print(
-                    "[MovieMind Media] candidate detected "
+                    "[CineVerse Media] candidate detected "
                     f"host={parsed.hostname or ''} path={parsed.path} "
                     f"source={candidate.get('source', 'unknown')} "
                     f"contentType={candidate.get('contentType', '')} "
@@ -1889,14 +1889,14 @@ Return only the answer, with no meta commentary.
             if hasattr(self, "browser_play_detected_button"):
                 self.browser_play_detected_button.setEnabled(True)
                 self.browser_play_detected_button.setToolTip(
-                    "A direct media resource was detected. Click to play it with MovieMind's VLC player."
+                    "A direct media resource was detected. Click to play it with CineVerse's VLC player."
                 )
 
     def _play_detected_browser_media(self) -> None:
         """Hand the selected website media URL to VLC, preserving useful HTTP headers."""
         candidate = self._latest_browser_media_candidate
         print(
-            "[MovieMind Media] Play detected video clicked "
+            "[CineVerse Media] Play detected video clicked "
             f"activePage={self.browser_view.url().toString() if self.browser_view else ''} "
             f"candidate={'present' if candidate else 'none'}",
             flush=True,
@@ -1904,7 +1904,7 @@ Return only the answer, with no meta commentary.
         if candidate:
             parsed = urlparse(candidate.get("url", ""))
             print(
-                "[MovieMind Media] handoff candidate "
+                "[CineVerse Media] handoff candidate "
                 f"host={parsed.hostname or ''} path={parsed.path} "
                 f"source={candidate.get('source', 'unknown')} "
                 f"contentType={candidate.get('contentType', '')} "
@@ -1939,7 +1939,7 @@ Return only the answer, with no meta commentary.
         if self._browser_stack is None or self.browser_view is None or QWebEnginePage is None:
             return None
         popup_view = QWebEngineView(self._browser_stack)
-        popup_page = MovieMindDiagnosticWebPage(
+        popup_page = CineVerseDiagnosticWebPage(
             self._browser_main_view.page().profile(), popup_view, self
         )
         popup_view.setPage(popup_page)
@@ -1951,7 +1951,7 @@ Return only the answer, with no meta commentary.
         if self.browser_close_popup_button is not None:
             self.browser_close_popup_button.show()
         print(
-            f"[MovieMind WebEngine POPUP] opened in-app view type={window_type}",
+            f"[CineVerse WebEngine POPUP] opened in-app view type={window_type}",
             flush=True,
         )
         return popup_page
@@ -1972,7 +1972,7 @@ Return only the answer, with no meta commentary.
         if self.browser_close_popup_button is not None:
             self.browser_close_popup_button.setVisible(bool(self._browser_popup_views))
         print(
-            f"[MovieMind WebEngine POPUP] returned to "
+            f"[CineVerse WebEngine POPUP] returned to "
             f"{self.browser_view.url().toString() if self.browser_view else ''}",
             flush=True,
         )
@@ -1982,13 +1982,13 @@ Return only the answer, with no meta commentary.
             self._close_embedded_popup()
 
     def _close_embedded_browser(self) -> None:
-        """Hide the website overlay and return to MovieMind's VLC video surface."""
+        """Hide the website overlay and return to CineVerse's VLC video surface."""
         if self.browser_panel is not None:
             self.browser_panel.hide()
         self._set_status("PLAYER READY")
 
     def _open_webpage_in_browser(self, url: str, reason: str) -> None:
-        """Load a webpage inside MovieMind when Qt WebEngine is available."""
+        """Load a webpage inside CineVerse when Qt WebEngine is available."""
         if self.browser_view is not None and self.browser_panel is not None:
             try:
                 self._close_all_embedded_popups()
@@ -1998,11 +1998,11 @@ Return only the answer, with no meta commentary.
                 self.browser_panel.raise_()
                 self.browser_view.setUrl(QUrl(url))
                 self.answer_area.setPlainText(
-                    "Loading this website inside MovieMind. Sign in on the site if required.\n\n"
+                    "Loading this website inside CineVerse. Sign in on the site if required.\n\n"
                     + reason
                     + "\n\nIf the website's video player is incompatible with the embedded browser, "
                     "it may still show a black screen. Protected streaming services may require "
-                    "browser DRM support that MovieMind's embedded browser does not provide."
+                    "browser DRM support that CineVerse's embedded browser does not provide."
                 )
                 self._set_status("OPENING WEBSITE INSIDE MOVIEMIND")
                 return
@@ -2099,11 +2099,11 @@ Return only the answer, with no meta commentary.
             )
         except Exception as exc:
             # Unsupported pages often have their own JavaScript player. Hand the original
-            # URL to the default browser instead of leaving MovieMind on a black screen.
+            # URL to the default browser instead of leaving CineVerse on a black screen.
             self._open_webpage_in_browser(
                 url,
-                "MovieMind could not extract a VLC-compatible stream (" + str(exc) + "). "
-                "The website may need its own browser player. The MovieMind video panel "
+                "CineVerse could not extract a VLC-compatible stream (" + str(exc) + "). "
+                "The website may need its own browser player. The CineVerse video panel "
                 "will not display this browser playback.",
             )
         finally:
@@ -2148,7 +2148,7 @@ Return only the answer, with no meta commentary.
         except Exception as exc:
             QMessageBox.warning(
                 self, "Could not open YouTube video",
-                "MovieMind could not resolve this YouTube link. Check your internet connection, "
+                "CineVerse could not resolve this YouTube link. Check your internet connection, "
                 "confirm the video is publicly playable, update yt-dlp, and try again.\n\n"
                 + str(exc)
             )
@@ -2238,7 +2238,7 @@ Return only the answer, with no meta commentary.
         except Exception as exc:
             QMessageBox.critical(
                 self, "Could not play media",
-                "MovieMind could not start this media source. Check that the URL is accessible "
+                "CineVerse could not start this media source. Check that the URL is accessible "
                 "to VLC, then try again.\n\n" + str(exc)
             )
 
@@ -2458,7 +2458,7 @@ Return only the answer, with no meta commentary.
             self._visual_last_subtitle_signature = subtitle_signature
             self._visual_last_subtitle = subtitle
         except Exception as exc:
-            print(f"[MovieMind visual memory] {type(exc).__name__}: {exc}")
+            print(f"[CineVerse visual memory] {type(exc).__name__}: {exc}")
         finally:
             try:
                 if os.path.exists(path):
@@ -2584,7 +2584,7 @@ Return only the answer, with no meta commentary.
                 pass
 
     def _restore_audio_output(self) -> None:
-        """Reapply MovieMind's volume after VLC has initialized the selected media."""
+        """Reapply CineVerse's volume after VLC has initialized the selected media."""
         if not self.player or not self.current_path:
             return
         try:
@@ -2901,8 +2901,8 @@ Return only the answer, with no meta commentary.
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("MovieMind")
-    window = MovieMindQtPlayer()
+    app.setApplicationName("CineVerse")
+    window = CineVerseQtPlayer()
     window.show()
     return app.exec()
 
