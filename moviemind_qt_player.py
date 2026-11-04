@@ -141,7 +141,7 @@ def _install_netmirror_compatibility(view) -> None:
     window.__moviemindMediaCandidates = window.__moviemindMediaCandidates || [];
     window.addEventListener("message", function (event) {
       const data = event && event.data;
-      if (data && data.type === "MOVIEMIND_MEDIA_CANDIDATE" &&
+      if (data && data.type === "CINEVERSE_MEDIA_CANDIDATE" &&
           typeof data.url === "string" && /^https?:/i.test(data.url)) {
         const list = window.__moviemindMediaCandidates;
         if (!list.some(item => item.url === data.url)) {
@@ -172,7 +172,7 @@ def _install_netmirror_compatibility(view) -> None:
       if (seenMedia.has(url)) return;
       seenMedia.add(url);
       const candidate = {
-        type: "MOVIEMIND_MEDIA_CANDIDATE",
+        type: "CINEVERSE_MEDIA_CANDIDATE",
         url: url,
         source: source || "resource",
         contentType: contentType || "",
@@ -694,7 +694,7 @@ class CineVerseQtPlayer(QMainWindow):
         side.setContentsMargins(18, 18, 18, 18)
         side.setSpacing(10)
 
-        side_eyebrow = QLabel("MOVIEMIND AI")
+        side_eyebrow = QLabel("CINEVERSE AI")
         side_eyebrow.setObjectName("eyebrow")
         side.addWidget(side_eyebrow)
         title = QLabel("Your movie companion")
@@ -731,7 +731,7 @@ class CineVerseQtPlayer(QMainWindow):
         side.addLayout(language_row)
         side.addWidget(QLabel("CHOOSE AN ACTION"))
 
-        answer_heading = QLabel("MOVIEMIND RESPONSE")
+        answer_heading = QLabel("CINEVERSE RESPONSE")
         answer_heading.setObjectName("eyebrow")
         side.addWidget(answer_heading)
         self.answer_area = QTextBrowser()
@@ -840,7 +840,7 @@ class CineVerseQtPlayer(QMainWindow):
             self.answer_area.setPlainText("Open a movie before researching Easter eggs.")
             return
         if self.ai_request_running:
-            self._set_status("ANOTHER MOVIEMIND REQUEST IS RUNNING")
+            self._set_status("ANOTHER CINEVERSE REQUEST IS RUNNING")
             return
         snapshot_path = str(Path(tempfile.gettempdir()) / f"moviemind_easteregg_{uuid.uuid4().hex}.png")
         try:
@@ -2004,7 +2004,7 @@ Return only the answer, with no meta commentary.
                     "it may still show a black screen. Protected streaming services may require "
                     "browser DRM support that CineVerse's embedded browser does not provide."
                 )
-                self._set_status("OPENING WEBSITE INSIDE MOVIEMIND")
+                self._set_status("OPENING WEBSITE INSIDE CINEVERSE")
                 return
             except Exception as exc:
                 reason = reason + " Embedded browser failed: " + str(exc)
